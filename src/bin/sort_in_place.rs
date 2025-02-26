@@ -12,6 +12,9 @@ struct Command {
     /// The maximum size of the file to be sorted in memory
     #[clap(long, default_value = "1GB")]
     size_limit: Size,
+    /// Only output unique lines
+    #[clap(short, long)]
+    uniq: bool,
 }
 
 fn main() -> AnyResult {
@@ -33,6 +36,9 @@ fn main() -> AnyResult {
         lines.push(line);
     }
     lines.sort();
+    if cmd.uniq {
+        lines.dedup();
+    }
 
     let mut tmp_path = cmd.path.clone();
     tmp_path.set_extension("dsort_tmp");

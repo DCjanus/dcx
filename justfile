@@ -1,3 +1,5 @@
+default: install
+
 install: prepare
     cargo install --path . -f --locked
 
