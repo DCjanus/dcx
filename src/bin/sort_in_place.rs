@@ -15,6 +15,9 @@ struct Command {
     /// Only output unique lines
     #[clap(short, long)]
     uniq: bool,
+    /// Trim whitespace from the lines
+    #[clap(short, long)]
+    trim_whitespace: bool,
 }
 
 fn main() -> AnyResult {
@@ -35,6 +38,12 @@ fn main() -> AnyResult {
         let line = line.context("Failed to read line")?;
         lines.push(line);
     }
+    if cmd.trim_whitespace {
+        lines.iter_mut().for_each(|line| {
+            *line = line.trim().to_string();
+        });
+    }
+
     lines.sort();
     if cmd.uniq {
         lines.dedup();
@@ -44,7 +53,7 @@ fn main() -> AnyResult {
     tmp_path.set_extension("dsort_tmp");
     let mut writer = std::fs::File::create(&tmp_path).context("Failed to create temp file")?;
     for line in lines {
-        writeln!(writer, "{}", line).context("Failed to write line")?;
+        writeln!(writer, "{line}").context("Failed to write line")?;
     }
     writer.flush().context("Failed to flush temp file")?;
 
