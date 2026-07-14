@@ -2,39 +2,15 @@
 
 `dtools` 是一组用于处理 UTF-8 文本文件和流的小型命令行工具。
 
-## 使用
+## 子命令
 
 ### `dtools sort`
 
-原地排序文本文件。命令会将整个文件读入内存，把结果写入同目录下的临时文件，再原子替换原文件。
-
-```console
-dtools sort [OPTIONS] <PATH>
-```
-
-参数：
-
-- `--size-limit <SIZE>`：允许读入内存的最大文件大小，默认为 `1GB`
-- `-u, --uniq`：排序后删除重复行
-- `-t, --trim-whitespace`：排序前移除行首和行尾空白
-
-```console
-dtools sort --uniq --trim-whitespace words.txt
-```
+原地排序文本文件。命令会将整个文件读入内存，把结果写入同目录下的临时文件，再原子替换原文件；也可以在排序时去重或移除行首和行尾空白。
 
 ### `dtools uniq`
 
-从标准输入中删除重复行，不要求输入预先排序。默认按照首次出现的顺序输出。
-
-```console
-dtools uniq [OPTIONS]
-```
-
-使用 `--count` 输出各唯一行及其出现次数；计数模式不保证输出顺序。
-
-```console
-cat words.txt | dtools uniq --count
-```
+从标准输入中删除重复行，不要求输入预先排序。默认按照首次出现的顺序输出，也可以统计各唯一行的出现次数。
 
 ## 安装
 
@@ -65,8 +41,8 @@ cargo binstall --force --git https://github.com/DCjanus/dtools dtools
 
 命令迁移关系：
 
-- `sort_in_place ...` 改为 `dtools sort ...`
-- `uniq_any_order ...` 改为 `dtools uniq ...`
+- `sort_in_place` 改为 `dtools sort`
+- `uniq_any_order` 改为 `dtools uniq`
 
 ## 开发
 
