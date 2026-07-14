@@ -1,22 +1,22 @@
 # dtools
 
-`dtools` is a small collection of command-line tools for processing UTF-8 text files and streams.
+`dtools` 是一组用于处理 UTF-8 文本文件和流的小型命令行工具。
 
-## Tools
+## 工具
 
 ### `sort_in_place`
 
-Sort a text file in place. The command reads the entire file into memory, writes the result to a temporary file in the same directory, and atomically replaces the original file.
+原地排序文本文件。命令会将整个文件读入内存，把结果写入同目录下的临时文件，再原子替换原文件。
 
 ```console
 sort_in_place [OPTIONS] <PATH>
 ```
 
-Options:
+参数：
 
-- `--size-limit <SIZE>`: maximum file size to read into memory (default: `1GB`)
-- `-u, --uniq`: remove duplicate lines after sorting
-- `-t, --trim-whitespace`: trim leading and trailing whitespace before sorting
+- `--size-limit <SIZE>`：允许读入内存的最大文件大小，默认为 `1GB`
+- `-u, --uniq`：排序后删除重复行
+- `-t, --trim-whitespace`：排序前移除行首和行尾空白
 
 ```console
 sort_in_place --uniq --trim-whitespace words.txt
@@ -24,45 +24,45 @@ sort_in_place --uniq --trim-whitespace words.txt
 
 ### `uniq_any_order`
 
-Remove duplicate lines from standard input without requiring sorted input. By default, lines are emitted in first-seen order.
+从标准输入中删除重复行，不要求输入预先排序。默认按照首次出现的顺序输出。
 
 ```console
 uniq_any_order [OPTIONS]
 ```
 
-Use `--count` to print each unique line with its occurrence count. Counted output order is unspecified.
+使用 `--count` 输出各唯一行及其出现次数；计数模式不保证输出顺序。
 
 ```console
 cat words.txt | uniq_any_order --count
 ```
 
-## Installation
+## 安装
 
-The recommended installation method is [cargo-binstall](https://github.com/cargo-bins/cargo-binstall). It downloads the prebuilt binaries from this repository's continuously updated `latest` release:
+推荐使用 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 安装。它会从本仓库持续更新的 `latest` Release 下载预编译二进制，无需本地编译：
 
 ```console
 cargo binstall --git https://github.com/DCjanus/dtools dtools
 ```
 
-This installs both `sort_in_place` and `uniq_any_order`. Prebuilt packages are available for x86_64 Linux, Intel and Apple Silicon macOS, and x86_64 and ARM64 Windows.
+该命令会同时安装 `sort_in_place` 和 `uniq_any_order`。预编译包覆盖 x86_64 Linux、Intel 与 Apple Silicon macOS，以及 x86_64 与 ARM64 Windows。
 
-To build the latest checkout from source with Rust 1.85 or newer instead:
+如需从源码安装，请使用 Rust 1.85 或更高版本：
 
 ```console
 cargo install --git https://github.com/DCjanus/dtools --locked dtools
 ```
 
-Both `sort_in_place` and `uniq_any_order` will be installed in Cargo's binary directory.
+两个命令都会安装到 Cargo 的二进制目录。
 
-## Development
+## 开发
 
-Run the complete local check suite with [just](https://github.com/casey/just):
+使用 [just](https://github.com/casey/just) 运行完整的本地检查：
 
 ```console
 just check
 ```
 
-The underlying commands only require stable Rust:
+底层命令只依赖 stable Rust：
 
 ```console
 cargo fmt --all -- --check
@@ -70,6 +70,6 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-## License
+## 许可证
 
 [MIT](LICENSE)

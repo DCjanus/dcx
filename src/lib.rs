@@ -8,7 +8,7 @@ use tempfile::NamedTempFile;
 
 pub type AnyResult<T = ()> = anyhow::Result<T>;
 
-/// Sort a UTF-8 text file and atomically replace it with the result.
+/// 排序 UTF-8 文本文件，并使用结果原子替换原文件。
 pub fn sort_file(path: &Path, size_limit: u64, uniq: bool, trim_whitespace: bool) -> AnyResult {
     let file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
     let metadata = file
@@ -70,7 +70,7 @@ pub fn sort_file(path: &Path, size_limit: u64, uniq: bool, trim_whitespace: bool
     Ok(())
 }
 
-/// Write unique input lines, either on first occurrence or with final counts.
+/// 输出唯一输入行，可在首次出现时直接输出，也可在统计完成后输出次数。
 pub fn uniq_any_order<R: BufRead, W: Write>(
     reader: R,
     mut writer: W,

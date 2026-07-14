@@ -3,18 +3,25 @@ use dtools::{AnyResult, sort_file};
 use size::Size;
 use std::path::PathBuf;
 
+/// 原地排序 UTF-8 文本文件。
 #[derive(Debug, Parser)]
+#[command(about = "Sort a UTF-8 text file in place")]
 struct Command {
-    /// Sort the file in place
+    /// 要原地排序的文件
+    #[arg(help = "The file to sort in place")]
     path: PathBuf,
-    /// The maximum size of the file to be sorted in memory
-    #[arg(long, default_value = "1GB")]
+    /// 允许在内存中排序的最大文件大小
+    #[arg(
+        long,
+        default_value = "1GB",
+        help = "Maximum file size to sort in memory"
+    )]
     size_limit: Size,
-    /// Only output unique lines
-    #[arg(short, long)]
+    /// 只保留唯一行
+    #[arg(short, long, help = "Keep only unique lines")]
     uniq: bool,
-    /// Trim whitespace from the lines
-    #[arg(short, long)]
+    /// 移除行首和行尾空白
+    #[arg(short, long, help = "Trim leading and trailing whitespace")]
     trim_whitespace: bool,
 }
 
