@@ -1,4 +1,4 @@
-name: 持续集成
+name: CI
 
 on:
   pull_request:
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   check:
-    name: 检查
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -31,7 +31,7 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
 
   test:
-    name: 测试 (${{ matrix.os }})
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -44,7 +44,7 @@ jobs:
       - run: cargo test --locked --all-targets
 
   msrv:
-    name: Rust 1.85 最低版本
+    name: Rust 1.85
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -53,7 +53,7 @@ jobs:
       - run: cargo check --locked --all-targets
 
   build:
-    name: 构建 (${{ matrix.target }})
+    name: Build (${{ matrix.target }})
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs:
       - check
@@ -132,7 +132,7 @@ jobs:
           if-no-files-found: error
 
   release-latest:
-    name: 发布 latest
+    name: Release latest
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs:
       - build
