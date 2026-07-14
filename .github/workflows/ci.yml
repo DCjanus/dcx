@@ -1,0 +1,188 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo machete
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked --all-targets
+
+  msrv:
+    name: Rust 1.85
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.85
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --all-targets
+
+  build:
+    name: Build (${{ matrix.target }})
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs:
+      - check
+      - test
+      - msrv
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tgz
+            binary_ext: ""
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tgz
+            binary_ext: ""
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            archive_ext: tgz
+            binary_ext: ""
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+            binary_ext: ".exe"
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive_ext: zip
+            binary_ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: 构建发布二进制
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --locked --target "${TARGET}"
+      - name: 打包发布二进制（Unix）
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCHIVE_EXT: ${{ matrix.archive_ext }}
+          BINARY_EXT: ${{ matrix.binary_ext }}
+        run: |
+          set -euo pipefail
+          package_dir="${RUNNER_TEMP}/dtools-${TARGET}"
+          archive_path="${RUNNER_TEMP}/dtools-${TARGET}.${ARCHIVE_EXT}"
+          mkdir -p "${package_dir}"
+          cp "target/${TARGET}/release/dtools${BINARY_EXT}" "${package_dir}/"
+          tar -C "${RUNNER_TEMP}" -czf "${archive_path}" "dtools-${TARGET}"
+          echo "PACKAGE_PATH=${archive_path}" >> "${GITHUB_ENV}"
+      - name: 打包发布二进制（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          $packageDir = Join-Path $env:RUNNER_TEMP "dtools-$env:TARGET"
+          $archivePath = Join-Path $env:RUNNER_TEMP "dtools-$env:TARGET.zip"
+          New-Item -ItemType Directory -Path $packageDir | Out-Null
+          Copy-Item "target/$env:TARGET/release/dtools.exe" $packageDir
+          Compress-Archive -Path $packageDir -DestinationPath $archivePath
+          "PACKAGE_PATH=$archivePath" >> $env:GITHUB_ENV
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dtools-release-package-${{ matrix.target }}
+          path: ${{ env.PACKAGE_PATH }}
+          if-no-files-found: error
+
+  release-latest:
+    name: Release latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dtools-release-package-*
+          path: ${{ runner.temp }}/latest-release-assets
+          merge-multiple: true
+      - name: 将 latest 标签移动到当前提交
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags origin
+          git tag -f latest "${GITHUB_SHA}"
+          git push --force origin refs/tags/latest
+      - name: 发布 latest Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ASSET_DIR: ${{ runner.temp }}/latest-release-assets
+        run: |
+          set -euo pipefail
+          notes_file="${RUNNER_TEMP}/latest-release-notes.md"
+          cat > "${notes_file}" <<EOF
+          当前 master 分支最新提交的预编译二进制。
+
+          - 提交：\`${GITHUB_SHA}\`
+          - 提交地址：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}
+          EOF
+
+          if gh release view latest >/dev/null 2>&1; then
+            gh release edit latest \
+              --title latest \
+              --notes-file "${notes_file}" \
+              --prerelease
+          else
+            gh release create latest \
+              --title latest \
+              --notes-file "${notes_file}" \
+              --prerelease \
+              --latest=false \
+              --target "${GITHUB_SHA}"
+          fi
+
+          gh release upload latest "${RELEASE_ASSET_DIR}"/* --clobber
