@@ -50,6 +50,7 @@ just check
 底层命令只依赖 stable Rust：
 
 ```console
+cargo machete
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets

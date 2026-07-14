@@ -14,6 +14,7 @@ fix:
     cargo clippy --fix --allow-dirty --all-targets
 
 check:
+    cargo machete
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets -- -D warnings
     cargo test --locked --all-targets
