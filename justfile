@@ -4,18 +4,16 @@ install: prepare
     cargo install --path . -f --locked
 
 prepare:
-    just fix
     just fmt
     just check
 
 fmt:
-    cargo sort
-    cargo +nightly fmt
+    cargo fmt --all
 
 fix:
-    cargo +nightly clippy --fix --allow-dirty
+    cargo clippy --fix --allow-dirty --all-targets
 
 check:
-    cargo machete
-    cargo +nightly fmt -- --check
-    cargo +nightly clippy -- -D warnings
+    cargo fmt --all -- --check
+    cargo clippy --locked --all-targets -- -D warnings
+    cargo test --locked --all-targets

@@ -1,8 +1,6 @@
-use anyhow::{Context, bail};
 use clap::Parser;
-use dtools::AnyResult;
+use dtools::{AnyResult, sort_file};
 use size::Size;
-use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -10,53 +8,22 @@ struct Command {
     /// Sort the file in place
     path: PathBuf,
     /// The maximum size of the file to be sorted in memory
-    #[clap(long, default_value = "1GB")]
+    #[arg(long, default_value = "1GB")]
     size_limit: Size,
     /// Only output unique lines
-    #[clap(short, long)]
+    #[arg(short, long)]
     uniq: bool,
     /// Trim whitespace from the lines
-    #[clap(short, long)]
+    #[arg(short, long)]
     trim_whitespace: bool,
 }
 
 fn main() -> AnyResult {
-    let cmd: Command = Parser::parse();
-    let file = std::fs::File::open(&cmd.path).context("Failed to open file")?;
-    let meta = file.metadata().context("Failed to get file metadata")?;
-    if meta.len() > cmd.size_limit.bytes() as u64 {
-        bail!(
-            "File too large to sort in memory, expected at most {}, got {}",
-            cmd.size_limit,
-            Size::from_bytes(meta.len())
-        );
-    }
-
-    let reader = BufReader::new(file);
-    let mut lines = Vec::new();
-    for line in reader.lines() {
-        let line = line.context("Failed to read line")?;
-        lines.push(line);
-    }
-    if cmd.trim_whitespace {
-        lines.iter_mut().for_each(|line| {
-            *line = line.trim().to_string();
-        });
-    }
-
-    lines.sort();
-    if cmd.uniq {
-        lines.dedup();
-    }
-
-    let mut tmp_path = cmd.path.clone();
-    tmp_path.set_extension("dsort_tmp");
-    let mut writer = std::fs::File::create(&tmp_path).context("Failed to create temp file")?;
-    for line in lines {
-        writeln!(writer, "{line}").context("Failed to write line")?;
-    }
-    writer.flush().context("Failed to flush temp file")?;
-
-    std::fs::rename(&tmp_path, &cmd.path).context("Failed to rename temp file")?;
-    Ok(())
+    let command = Command::parse();
+    sort_file(
+        &command.path,
+        command.size_limit.bytes() as u64,
+        command.uniq,
+        command.trim_whitespace,
+    )
 }
