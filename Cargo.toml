@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["DCjanus <DCjanus@dcjanus.com>"]
 edition = "2024"
 rust-version = "1.85"
+default-run = "dtools"
 description = "用于处理文本文件和流的小型命令行工具集"
 repository = "https://github.com/DCjanus/dtools"
 license = "MIT"
