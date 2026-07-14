@@ -38,10 +38,18 @@ cat words.txt | uniq_any_order --count
 
 ## Installation
 
-Install the latest checkout with Rust 1.85 or newer:
+The recommended installation method is [cargo-binstall](https://github.com/cargo-bins/cargo-binstall). It downloads the prebuilt binaries from this repository's continuously updated `latest` release:
 
 ```console
-cargo install --path . --locked
+cargo binstall --git https://github.com/DCjanus/dtools dtools
+```
+
+This installs both `sort_in_place` and `uniq_any_order`. Prebuilt packages are available for x86_64 Linux, Intel and Apple Silicon macOS, and x86_64 and ARM64 Windows.
+
+To build the latest checkout from source with Rust 1.85 or newer instead:
+
+```console
+cargo install --git https://github.com/DCjanus/dtools --locked dtools
 ```
 
 Both `sort_in_place` and `uniq_any_order` will be installed in Cargo's binary directory.
