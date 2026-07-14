@@ -12,6 +12,15 @@
 
 从标准输入中删除重复行，不要求输入预先排序。默认按照首次出现的顺序输出，也可以统计各唯一行的出现次数。
 
+## 为什么不直接用 coreutils
+
+`dtools` 不是要替代功能完整的 coreutils，而是固化几个个人常用、用现有命令组合起来不够顺手的文本处理流程：
+
+- GNU `sort` 支持将结果写回输入文件，但其[官方文档](https://www.gnu.org/software/coreutils/sort)也提醒，原地写入在系统崩溃或发生严重 I/O 错误时可能丢失数据。`dtools sort` 会先在同目录写入唯一临时文件，同步内容并保留原权限，再替换原文件，同时可以在排序前统一处理行首和行尾空白。
+- coreutils `uniq` 只识别相邻的重复行；处理不相邻重复行通常需要先排序，这会改变原始顺序。`dtools uniq` 直接对整个输入去重，默认保留首次出现顺序，也能统计全局出现次数。详见 GNU [`uniq` 文档](https://www.gnu.org/software/coreutils/uniq)。
+
+这些便利建立在将输入保存在内存中的前提上，因此它更适合有明确大小边界的个人数据处理，不适合作为 coreutils 处理超大文件能力的替代品。
+
 ## 安装
 
 推荐使用 [cargo-binstall](https://github.com/cargo-bins/cargo-binstall) 安装。它会从本仓库持续更新的 `latest` Release 下载预编译二进制，无需本地编译：
@@ -29,20 +38,6 @@ cargo install --force --git https://github.com/DCjanus/dtools --locked dtools
 ```
 
 `dtools` 会安装到 Cargo 的二进制目录。
-
-## 从旧版迁移
-
-项目不再提供独立的 `sort_in_place` 和 `uniq_any_order` binary。曾经安装过旧版时，先卸载旧包，再重新安装：
-
-```console
-cargo uninstall dtools
-cargo binstall --force --git https://github.com/DCjanus/dtools dtools
-```
-
-命令迁移关系：
-
-- `sort_in_place` 改为 `dtools sort`
-- `uniq_any_order` 改为 `dtools uniq`
 
 ## 开发
 
