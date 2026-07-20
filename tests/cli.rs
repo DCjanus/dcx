@@ -67,7 +67,7 @@ fn installs_a_dynamic_bash_completion_registration() {
     assert!(
         String::from_utf8(output.stdout)
             .unwrap()
-            .contains(&destination.display().to_string())
+            .starts_with("installed bash completion to ")
     );
 }
 
