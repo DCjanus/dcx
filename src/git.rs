@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{self, ErrorKind, IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output};
+use std::process::{Command, ExitStatus, Output, Stdio};
 
 use anyhow::{Context, bail};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -253,15 +253,78 @@ fn changes_absorbed(branch: &Branch, base: &str) -> AnyResult<Option<DeleteKind>
         bail!("git merge-base failed for {} and {base}", branch.name);
     }
 
-    let merge = git_output(&["merge-tree", "--write-tree", &base_object, &branch.object])?;
+    if let Some(merged_tree) = merge_tree(&base_object, &branch.object)? {
+        let base_tree = revision_tree(&base_object)?;
+        if merged_tree == base_tree {
+            return Ok(Some(DeleteKind::Equivalent));
+        }
+    }
+
+    if changes_historically_absorbed(branch, &base_object)? {
+        return Ok(Some(DeleteKind::Equivalent));
+    }
+
+    Ok(None)
+}
+
+fn changes_historically_absorbed(branch: &Branch, base_object: &str) -> AnyResult<bool> {
+    let merge_base = git_stdout(&["merge-base", &branch.object, base_object])?;
+    let branch_patch_ids = git_patch_ids(&[
+        "-c",
+        "diff.external=",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--full-index",
+        "--binary",
+        &merge_base,
+        &branch.object,
+    ])?;
+    let Some((branch_patch_id, _)) = branch_patch_ids.first() else {
+        return Ok(false);
+    };
+
+    let excluded_merge_base = format!("^{merge_base}");
+    let historical_patch_ids = git_patch_ids(&[
+        "-c",
+        "diff.external=",
+        "log",
+        "--first-parent",
+        "--no-merges",
+        "--format=medium",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--full-index",
+        "--binary",
+        "-p",
+        base_object,
+        &excluded_merge_base,
+    ])?;
+
+    for (patch_id, commit) in historical_patch_ids {
+        if patch_id != *branch_patch_id {
+            continue;
+        }
+        let parent = rev_parse_commit(&format!("{commit}^"))?;
+        let Some(merged_tree) = merge_tree(&parent, &branch.object)? else {
+            continue;
+        };
+        if merged_tree == revision_tree(&commit)? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn merge_tree(left: &str, right: &str) -> AnyResult<Option<String>> {
+    let arguments = ["merge-tree", "--write-tree", left, right];
+    let merge = git_output(&arguments)?;
     if !merge.status.success() {
         if merge.status.code() == Some(1) {
             return Ok(None);
         }
-        return Err(git_failure(
-            &["merge-tree", "--write-tree", &base_object, &branch.object],
-            &merge,
-        ));
+        return Err(git_failure(&arguments, &merge));
     }
     let merged_tree = String::from_utf8(merge.stdout)
         .context("git merge-tree returned non-UTF-8 output")?
@@ -270,8 +333,51 @@ fn changes_absorbed(branch: &Branch, base: &str) -> AnyResult<Option<DeleteKind>
         .context("git merge-tree returned no tree")?
         .trim()
         .to_owned();
-    let base_tree = git_stdout(&["rev-parse", &format!("{base_object}^{{tree}}")])?;
-    Ok((merged_tree == base_tree).then_some(DeleteKind::Equivalent))
+    Ok(Some(merged_tree))
+}
+
+fn revision_tree(revision: &str) -> AnyResult<String> {
+    git_stdout(&["rev-parse", &format!("{revision}^{{tree}}")])
+}
+
+fn git_patch_ids(arguments: &[&str]) -> AnyResult<Vec<(String, String)>> {
+    let mut producer = Command::new("git")
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("failed to run git {}", arguments.join(" ")))?;
+    let stdout = producer
+        .stdout
+        .take()
+        .context("git returned no stdout pipe")?;
+    let patch_arguments = ["patch-id", "--stable"];
+    let patch_output = Command::new("git")
+        .args(patch_arguments)
+        .stdin(Stdio::from(stdout))
+        .output()
+        .context("failed to run git patch-id --stable")?;
+    let producer_output = producer
+        .wait_with_output()
+        .with_context(|| format!("failed to wait for git {}", arguments.join(" ")))?;
+    if !producer_output.status.success() {
+        return Err(git_failure(arguments, &producer_output));
+    }
+    if !patch_output.status.success() {
+        return Err(git_failure(&patch_arguments, &patch_output));
+    }
+
+    String::from_utf8(patch_output.stdout)
+        .context("git patch-id returned non-UTF-8 output")?
+        .lines()
+        .map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() != 2 {
+                bail!("unexpected git patch-id output");
+            }
+            Ok((fields[0].to_owned(), fields[1].to_owned()))
+        })
+        .collect()
 }
 
 fn load_exclude_config() -> AnyResult<ExcludeConfig> {

@@ -93,6 +93,46 @@ fn deletes_a_squash_merged_branch_after_its_upstream_is_pruned() {
 }
 
 #[test]
+fn deletes_a_squash_merged_branch_after_base_changes_the_same_file() {
+    let (root, repository) = setup_remote_repository();
+    let skills = root.path().join("skills");
+    git(&repository, &["switch", "--quiet", "-c", "feature"]);
+    fs::write(repository.join("feature.txt"), "merged\n").unwrap();
+    git(&repository, &["add", "feature.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "feature"]);
+    git(&repository, &["push", "--quiet", "-u", "origin", "feature"]);
+    git(&repository, &["switch", "--quiet", "main"]);
+    git(&repository, &["merge", "--quiet", "--squash", "feature"]);
+    git(&repository, &["commit", "--quiet", "-m", "squash feature"]);
+    fs::write(repository.join("feature.txt"), "changed later\n").unwrap();
+    git(
+        &repository,
+        &["commit", "--quiet", "-am", "change feature later"],
+    );
+    git(&repository, &["push", "--quiet", "origin", "main"]);
+    git(
+        &repository,
+        &["push", "--quiet", "origin", "--delete", "feature"],
+    );
+    git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
+    git(
+        &repository,
+        &["config", "diff.external", "missing-dtools-test-command"],
+    );
+
+    let output = dtools(&skills)
+        .current_dir(&repository)
+        .args(["git", "trim", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("DELETE feature"));
+    assert!(stdout.contains("changes already present in origin/main"));
+}
+
+#[test]
 fn keeps_a_gone_branch_that_still_has_unique_changes() {
     let (root, repository) = setup_remote_repository();
     let skills = root.path().join("skills");
@@ -102,6 +142,41 @@ fn keeps_a_gone_branch_that_still_has_unique_changes() {
     git(&repository, &["commit", "--quiet", "-m", "feature"]);
     git(&repository, &["push", "--quiet", "-u", "origin", "feature"]);
     git(&repository, &["switch", "--quiet", "main"]);
+    git(
+        &repository,
+        &["push", "--quiet", "origin", "--delete", "feature"],
+    );
+    git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
+
+    let output = dtools(&skills)
+        .current_dir(&repository)
+        .args(["git", "trim", "--dry-run"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("KEEP   feature"));
+    assert!(stdout.contains("unique changes remain"));
+}
+
+#[test]
+fn keeps_a_patch_equivalent_branch_when_the_historical_tree_differs() {
+    let (root, repository) = setup_remote_repository();
+    let skills = root.path().join("skills");
+    git(&repository, &["switch", "--quiet", "-c", "feature"]);
+    fs::write(repository.join("feature.txt"), "value \n").unwrap();
+    git(&repository, &["add", "feature.txt"]);
+    git(&repository, &["commit", "--quiet", "-m", "feature"]);
+    git(&repository, &["push", "--quiet", "-u", "origin", "feature"]);
+    git(&repository, &["switch", "--quiet", "main"]);
+    fs::write(repository.join("feature.txt"), "value\n").unwrap();
+    git(&repository, &["add", "feature.txt"]);
+    git(
+        &repository,
+        &["commit", "--quiet", "-m", "similar change on main"],
+    );
+    git(&repository, &["push", "--quiet", "origin", "main"]);
     git(
         &repository,
         &["push", "--quiet", "origin", "--delete", "feature"],
