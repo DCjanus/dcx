@@ -1,6 +1,6 @@
 # dtools
 
-`dtools` 是一组用于处理 UTF-8 文本文件和流的小型命令行工具。
+`dtools` 是一组用于处理 UTF-8 文本、维护 Git 仓库和辅助 Coding Agent 的小型命令行工具。
 
 ## 子命令
 
@@ -11,6 +11,18 @@
 ### `dtools uniq`
 
 用于不依赖预排序的全局去重，避免经典 `sort | uniq` 流程中额外的排序开销。
+
+### `dtools git trim`
+
+用于清理远端 upstream 已消失、且内容已经合入目标分支的本地 tracking branch，并保护当前分支、base、worktree 与仓库级 exclude 规则。该子命令需要 Git 2.38 或更高版本。
+
+### `dtools skill`
+
+用于把项目自带的 `dtools-cli` skill 安装到 Agent skills 目录。首次安装需要显式执行，之后 skill 会随实际运行的 `dtools` 自动保持同步。
+
+### 动态补全
+
+使用 `dtools --install-completion bash|fish|zsh` 一键安装 shell 注册脚本。补全候选会在使用时由当前 `PATH` 中的 `dtools` 动态生成，不会安装需要随版本更新的静态补全脚本。
 
 ## 安装
 

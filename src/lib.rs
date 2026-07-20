@@ -6,6 +6,10 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use tempfile::NamedTempFile;
 
+pub mod completion;
+pub mod git;
+pub mod skill;
+
 pub type AnyResult<T = ()> = anyhow::Result<T>;
 
 /// 排序 UTF-8 文本文件，并使用结果原子替换原文件。

@@ -5,11 +5,11 @@ authors = ["DCjanus <DCjanus@dcjanus.com>"]
 edition = "2024"
 rust-version = "1.85"
 default-run = "dtools"
-description = "用于处理文本文件和流的小型命令行工具集"
+description = "用于处理文本、维护 Git 仓库和辅助 Coding Agent 的小型命令行工具集"
 repository = "https://github.com/DCjanus/dtools"
 license = "MIT"
 readme = "README.md"
-keywords = ["cli", "sort", "text", "uniq"]
+keywords = ["cli", "git", "sort", "text", "uniq"]
 categories = ["command-line-utilities", "text-processing"]
 
 [package.metadata.binstall]
@@ -25,6 +25,8 @@ pkg-fmt = "tgz"
 [dependencies]
 anyhow = "1.0.103"
 clap = { version = "4.6.1", features = ["derive"] }
+clap_complete = { version = "4.6.7", features = ["unstable-dynamic"] }
+globset = "0.4.19"
 size = "0.5.0"
 tempfile = "3.27.0"
 
