@@ -2,7 +2,7 @@ mod common;
 
 use std::fs;
 
-use common::{dtools, git, init_repository};
+use common::{dcx, git, init_repository};
 
 fn setup_remote_repository() -> (tempfile::TempDir, std::path::PathBuf) {
     let root = tempfile::tempdir().unwrap();
@@ -30,7 +30,7 @@ fn keeps_a_newly_pushed_branch_while_its_upstream_exists() {
     git(&repository, &["push", "--quiet", "-u", "origin", "feature"]);
     git(&repository, &["switch", "--quiet", "main"]);
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -68,7 +68,7 @@ fn deletes_a_squash_merged_branch_after_its_upstream_is_pruned() {
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
 
-    let preview = dtools(&skills)
+    let preview = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -78,7 +78,7 @@ fn deletes_a_squash_merged_branch_after_its_upstream_is_pruned() {
     assert!(stdout.contains("DELETE feature"));
     assert!(stdout.contains("changes already present in origin/main"));
 
-    let deletion = dtools(&skills)
+    let deletion = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--yes"])
         .output()
@@ -117,10 +117,10 @@ fn deletes_a_squash_merged_branch_after_base_changes_the_same_file() {
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
     git(
         &repository,
-        &["config", "diff.external", "missing-dtools-test-command"],
+        &["config", "diff.external", "missing-dcx-test-command"],
     );
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -148,7 +148,7 @@ fn keeps_a_gone_branch_that_still_has_unique_changes() {
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -183,7 +183,7 @@ fn keeps_a_patch_equivalent_branch_when_the_historical_tree_differs() {
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -203,14 +203,14 @@ fn manages_repository_local_exclude_patterns() {
     fs::create_dir(&repository).unwrap();
     init_repository(&repository);
 
-    let add = dtools(&skills)
+    let add = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "exclude", "add", "release/*", "develop"])
         .output()
         .unwrap();
     assert!(add.status.success());
 
-    let list = dtools(&skills)
+    let list = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "exclude", "list"])
         .output()
@@ -221,18 +221,18 @@ fn manages_repository_local_exclude_patterns() {
         "develop\nrelease/*\n"
     );
     assert_eq!(
-        fs::read_to_string(repository.join(".git/dtools/trim-exclude")).unwrap(),
+        fs::read_to_string(repository.join(".git/dcx/trim-exclude")).unwrap(),
         "develop\nrelease/*\n"
     );
 
-    let remove = dtools(&skills)
+    let remove = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "exclude", "remove", "develop"])
         .output()
         .unwrap();
     assert!(remove.status.success());
     assert_eq!(
-        fs::read_to_string(repository.join(".git/dtools/trim-exclude")).unwrap(),
+        fs::read_to_string(repository.join(".git/dcx/trim-exclude")).unwrap(),
         "release/*\n"
     );
 }
@@ -255,7 +255,7 @@ fn deletes_a_regularly_merged_branch_with_safe_git_deletion() {
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -290,14 +290,14 @@ fn respects_glob_excludes_when_a_gone_branch_is_otherwise_deletable() {
         &["push", "--quiet", "origin", "--delete", "release/feature"],
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
-    let add = dtools(&skills)
+    let add = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "exclude", "add", "release/*"])
         .output()
         .unwrap();
     assert!(add.status.success());
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -333,7 +333,7 @@ fn protects_a_branch_checked_out_in_a_linked_worktree() {
         ],
     );
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -371,7 +371,7 @@ fn recognizes_patch_equivalent_changes_after_a_rebase_style_merge() {
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()
@@ -410,7 +410,7 @@ fn preserves_local_commits_added_after_the_remote_branch_was_merged() {
     );
     git(&repository, &["fetch", "--quiet", "--prune", "origin"]);
 
-    let output = dtools(&skills)
+    let output = dcx(&skills)
         .current_dir(&repository)
         .args(["git", "trim", "--dry-run"])
         .output()

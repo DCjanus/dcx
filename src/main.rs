@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use dtools::{AnyResult, completion, git, skill, sort_file, uniq_any_order};
+use dcx::{AnyResult, completion, git, skill, sort_file, uniq_any_order};
 use size::Size;
 
 /// 文本处理、Git 仓库维护与 Coding Agent 辅助工具集。
@@ -59,8 +59,8 @@ enum Commands {
         #[command(subcommand)]
         subcommand: GitCommands,
     },
-    /// 管理 dtools 自带的 Agent skill。
-    #[command(about = "Manage the bundled dtools Agent skill")]
+    /// 管理 dcx 自带的 Agent skill。
+    #[command(about = "Manage the bundled dcx Agent skill")]
     Skill {
         #[command(subcommand)]
         subcommand: SkillCommands,
@@ -140,20 +140,20 @@ enum ExcludeCommands {
 #[derive(Debug, Subcommand)]
 enum SkillCommands {
     /// 安装、修复或手动更新内置 skill。
-    #[command(about = "Install or repair the bundled dtools skill")]
+    #[command(about = "Install or repair the bundled dcx skill")]
     Install {
         /// 备份并接管非托管的同名 skill
         #[arg(long, help = "Back up and replace an unmanaged skill directory")]
         force: bool,
     },
     /// 查看安装状态。
-    #[command(about = "Show whether the bundled dtools skill is current")]
+    #[command(about = "Show whether the bundled dcx skill is current")]
     Status,
     /// 输出实际安装路径。
     #[command(about = "Print the resolved installation path")]
     Path,
-    /// 卸载由 dtools 管理的文件。
-    #[command(about = "Remove files managed by dtools from the installed skill")]
+    /// 卸载由 dcx 管理的文件。
+    #[command(about = "Remove files managed by dcx from the installed skill")]
     Uninstall,
 }
 
@@ -169,7 +169,7 @@ fn main() -> AnyResult {
         .expect("clap requires either a subcommand or --install-completion");
     if !matches!(command, Commands::Skill { .. }) {
         if let Err(error) = skill::auto_update() {
-            eprintln!("warning: failed to update dtools-cli skill: {error:#}");
+            eprintln!("warning: failed to update dcx-cli skill: {error:#}");
         }
     }
 

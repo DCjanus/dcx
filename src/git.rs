@@ -10,7 +10,7 @@ use tempfile::NamedTempFile;
 
 use crate::AnyResult;
 
-const EXCLUDE_FILE: &str = "dtools/trim-exclude";
+const EXCLUDE_FILE: &str = "dcx/trim-exclude";
 
 #[derive(Debug)]
 struct Branch {
