@@ -1,20 +1,20 @@
 [package]
-name = "dtools"
+name = "dcx"
 version = "0.1.0"
 authors = ["DCjanus <DCjanus@dcjanus.com>"]
 edition = "2024"
 rust-version = "1.85"
-default-run = "dtools"
+default-run = "dcx"
 description = "用于处理文本、维护 Git 仓库和辅助 Coding Agent 的小型命令行工具集"
-repository = "https://github.com/DCjanus/dtools"
+repository = "https://github.com/DCjanus/dcx"
 license = "MIT"
 readme = "README.md"
 keywords = ["cli", "git", "sort", "text", "uniq"]
 categories = ["command-line-utilities", "text-processing"]
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/latest/dtools-{ target }{ archive-suffix }"
-bin-dir = "dtools-{ target }/{ bin }{ binary-ext }"
+pkg-url = "{ repo }/releases/download/latest/dcx-{ target }{ archive-suffix }"
+bin-dir = "dcx-{ target }/{ bin }{ binary-ext }"
 
 [package.metadata.binstall.overrides.'cfg(target_os = "windows")']
 pkg-fmt = "zip"

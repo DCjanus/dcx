@@ -3,9 +3,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-pub fn dtools(skills_directory: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_dtools"));
-    command.env("DTOOLS_SKILLS_DIR", skills_directory);
+pub fn dcx(skills_directory: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_dcx"));
+    command.env("DCX_SKILLS_DIR", skills_directory);
     command
 }
 

@@ -107,11 +107,11 @@ jobs:
           BINARY_EXT: ${{ matrix.binary_ext }}
         run: |
           set -euo pipefail
-          package_dir="${RUNNER_TEMP}/dtools-${TARGET}"
-          archive_path="${RUNNER_TEMP}/dtools-${TARGET}.${ARCHIVE_EXT}"
+          package_dir="${RUNNER_TEMP}/dcx-${TARGET}"
+          archive_path="${RUNNER_TEMP}/dcx-${TARGET}.${ARCHIVE_EXT}"
           mkdir -p "${package_dir}"
-          cp "target/${TARGET}/release/dtools${BINARY_EXT}" "${package_dir}/"
-          tar -C "${RUNNER_TEMP}" -czf "${archive_path}" "dtools-${TARGET}"
+          cp "target/${TARGET}/release/dcx${BINARY_EXT}" "${package_dir}/"
+          tar -C "${RUNNER_TEMP}" -czf "${archive_path}" "dcx-${TARGET}"
           echo "PACKAGE_PATH=${archive_path}" >> "${GITHUB_ENV}"
       - name: 打包发布二进制（Windows）
         if: runner.os == 'Windows'
@@ -119,15 +119,15 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          $packageDir = Join-Path $env:RUNNER_TEMP "dtools-$env:TARGET"
-          $archivePath = Join-Path $env:RUNNER_TEMP "dtools-$env:TARGET.zip"
+          $packageDir = Join-Path $env:RUNNER_TEMP "dcx-$env:TARGET"
+          $archivePath = Join-Path $env:RUNNER_TEMP "dcx-$env:TARGET.zip"
           New-Item -ItemType Directory -Path $packageDir | Out-Null
-          Copy-Item "target/$env:TARGET/release/dtools.exe" $packageDir
+          Copy-Item "target/$env:TARGET/release/dcx.exe" $packageDir
           Compress-Archive -Path $packageDir -DestinationPath $archivePath
           "PACKAGE_PATH=$archivePath" >> $env:GITHUB_ENV
       - uses: actions/upload-artifact@v7
         with:
-          name: dtools-release-package-${{ matrix.target }}
+          name: dcx-release-package-${{ matrix.target }}
           path: ${{ env.PACKAGE_PATH }}
           if-no-files-found: error
 
@@ -146,7 +146,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
-          pattern: dtools-release-package-*
+          pattern: dcx-release-package-*
           path: ${{ runner.temp }}/latest-release-assets
           merge-multiple: true
       - name: 将 latest 标签移动到当前提交

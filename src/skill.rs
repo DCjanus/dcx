@@ -11,9 +11,9 @@ use tempfile::NamedTempFile;
 
 use crate::AnyResult;
 
-const SKILL_NAME: &str = "dtools-cli";
-const MANIFEST_NAME: &str = ".dtools-managed";
-const MANIFEST_HEADER: &str = "dtools-skill-manifest-v1";
+const SKILL_NAME: &str = "dcx-cli";
+const MANIFEST_NAME: &str = ".dcx-managed";
+const MANIFEST_HEADER: &str = "dcx-skill-manifest-v1";
 
 struct BundledFile {
     path: &'static str,
@@ -23,11 +23,11 @@ struct BundledFile {
 const BUNDLED_FILES: &[BundledFile] = &[
     BundledFile {
         path: "SKILL.md",
-        contents: include_bytes!("../skills/dtools-cli/SKILL.md"),
+        contents: include_bytes!("../skills/dcx-cli/SKILL.md"),
     },
     BundledFile {
         path: "agents/openai.yaml",
-        contents: include_bytes!("../skills/dtools-cli/agents/openai.yaml"),
+        contents: include_bytes!("../skills/dcx-cli/agents/openai.yaml"),
     },
 ];
 
@@ -67,7 +67,7 @@ pub fn install(force: bool) -> AnyResult {
             create_and_synchronize(&paths.logical)?;
         } else {
             bail!(
-                "{} already exists and is not managed by dtools; use --force to back it up and replace it",
+                "{} already exists and is not managed by dcx; use --force to back it up and replace it",
                 paths.logical.display()
             );
         }
@@ -113,7 +113,7 @@ pub fn uninstall() -> AnyResult {
         return Ok(());
     }
     if !is_managed_directory(&paths.logical)? {
-        bail!("{} is not managed by dtools", paths.logical.display());
+        bail!("{} is not managed by dcx", paths.logical.display());
     }
 
     let manifest_path = paths.logical.join(MANIFEST_NAME);
@@ -153,10 +153,10 @@ fn skill_paths(create_root: bool) -> AnyResult<SkillPaths> {
 }
 
 fn skills_root() -> AnyResult<PathBuf> {
-    if let Some(directory) = env::var_os("DTOOLS_SKILLS_DIR") {
+    if let Some(directory) = env::var_os("DCX_SKILLS_DIR") {
         let directory = PathBuf::from(directory);
         if !directory.is_absolute() {
-            bail!("DTOOLS_SKILLS_DIR must be an absolute path");
+            bail!("DCX_SKILLS_DIR must be an absolute path");
         }
         return Ok(directory);
     }

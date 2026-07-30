@@ -27,9 +27,9 @@ impl CompletionShell {
 
     fn script_file_name(self) -> &'static str {
         match self {
-            Self::Bash => "dtools",
-            Self::Fish => "dtools.fish",
-            Self::Zsh => "_dtools",
+            Self::Bash => "dcx",
+            Self::Fish => "dcx.fish",
+            Self::Zsh => "_dcx",
         }
     }
 
@@ -42,7 +42,7 @@ impl CompletionShell {
     }
 }
 
-/// 安装会在每次补全时调用当前 `PATH` 中 dtools 的动态注册脚本。
+/// 安装会在每次补全时调用当前 `PATH` 中 dcx 的动态注册脚本。
 pub fn install(shell: CompletionShell) -> Result<()> {
     let destination = completion_install_path(shell)?;
     let script = completion_registration_script(shell)?;
@@ -107,17 +107,17 @@ fn completion_install_path_from_env(
 fn completion_registration_script(shell: CompletionShell) -> Result<String> {
     if matches!(shell, CompletionShell::Fish) {
         return Ok(concat!(
-            "function __dtools_complete\n",
-            "    set -l dtools_bin (builtin type --force-path dtools)\n",
-            "    test -n \"$dtools_bin\"; or return\n",
+            "function __dcx_complete\n",
+            "    set -l dcx_bin (builtin type --force-path dcx)\n",
+            "    test -n \"$dcx_bin\"; or return\n",
             "\n",
-            "    COMPLETE=fish \"$dtools_bin\" -- ",
+            "    COMPLETE=fish \"$dcx_bin\" -- ",
             "(commandline --current-process --tokenize --cut-at-cursor) ",
             "(commandline --current-token)\n",
             "end\n",
             "\n",
-            "complete --keep-order --exclusive --command dtools ",
-            "--arguments \"(__dtools_complete)\"\n",
+            "complete --keep-order --exclusive --command dcx ",
+            "--arguments \"(__dcx_complete)\"\n",
         )
         .to_owned());
     }
@@ -125,13 +125,7 @@ fn completion_registration_script(shell: CompletionShell) -> Result<String> {
     let mut buffer = Vec::new();
     shell
         .env_completer()
-        .write_registration(
-            "COMPLETE",
-            "dtools",
-            "dtools",
-            "__DTOOLS_COMPLETER__",
-            &mut buffer,
-        )
+        .write_registration("COMPLETE", "dcx", "dcx", "__DCX_COMPLETER__", &mut buffer)
         .context("failed to generate completion registration")?;
     let script = String::from_utf8(buffer)
         .context("generated completion registration was not valid UTF-8")?;
@@ -141,24 +135,24 @@ fn completion_registration_script(shell: CompletionShell) -> Result<String> {
             .replace(
                 "    local words=(\"${COMP_WORDS[@]}\")",
                 concat!(
-                    "    local dtools_bin\n",
-                    "    dtools_bin=$(builtin type -P dtools) || return\n",
-                    "    [[ -n \"$dtools_bin\" ]] || return\n",
+                    "    local dcx_bin\n",
+                    "    dcx_bin=$(builtin type -P dcx) || return\n",
+                    "    [[ -n \"$dcx_bin\" ]] || return\n",
                     "    local words=(\"${COMP_WORDS[@]}\")",
                 ),
             )
-            .replace("\"__DTOOLS_COMPLETER__\" --", "\"$dtools_bin\" --"),
+            .replace("\"__DCX_COMPLETER__\" --", "\"$dcx_bin\" --"),
         CompletionShell::Zsh => script
             .replace(
-                "function _clap_dynamic_completer_dtools() {\n",
+                "function _clap_dynamic_completer_dcx() {\n",
                 concat!(
-                    "function _clap_dynamic_completer_dtools() {\n",
-                    "    local dtools_bin\n",
-                    "    dtools_bin=\"$(builtin whence -p dtools)\" || return\n",
-                    "    [[ -n \"$dtools_bin\" ]] || return\n",
+                    "function _clap_dynamic_completer_dcx() {\n",
+                    "    local dcx_bin\n",
+                    "    dcx_bin=\"$(builtin whence -p dcx)\" || return\n",
+                    "    [[ -n \"$dcx_bin\" ]] || return\n",
                 ),
             )
-            .replace("__DTOOLS_COMPLETER__ --", "\"$dtools_bin\" --"),
+            .replace("__DCX_COMPLETER__ --", "\"$dcx_bin\" --"),
         CompletionShell::Fish => unreachable!("fish completion is generated separately"),
     })
 }
@@ -213,7 +207,7 @@ mod tests {
                 Some(data)
             )
             .unwrap(),
-            data.join("bash-completion/completions/dtools")
+            data.join("bash-completion/completions/dcx")
         );
         assert_eq!(
             completion_install_path_from_env(
@@ -223,7 +217,7 @@ mod tests {
                 Some(data)
             )
             .unwrap(),
-            config.join("fish/completions/dtools.fish")
+            config.join("fish/completions/dcx.fish")
         );
         assert_eq!(
             completion_install_path_from_env(
@@ -233,7 +227,7 @@ mod tests {
                 Some(data)
             )
             .unwrap(),
-            data.join("zsh/site-functions/_dtools")
+            data.join("zsh/site-functions/_dcx")
         );
     }
 
@@ -248,8 +242,8 @@ mod tests {
 
             assert!(script.contains("COMPLETE="));
             assert!(script.contains(shell.name()));
-            assert!(script.contains("dtools_bin"));
-            assert!(!script.contains("__DTOOLS_COMPLETER__"));
+            assert!(script.contains("dcx_bin"));
+            assert!(!script.contains("__DCX_COMPLETER__"));
         }
     }
 }
