@@ -18,6 +18,23 @@
 
 用于清理远端 upstream 已消失、且内容已经合入目标分支的本地 tracking branch，并保护当前分支、base、worktree 与仓库级 exclude 规则。该子命令需要 Git 2.38 或更高版本。
 
+### `dcx jwt inspect`
+
+用于以人类可读的表格查看 JWT header 与 claims，包括 issuer、audience，以及转换为 UTC 时间的 `iat`、`nbf`、`exp`。该命令只解码内容，不验证签名，并且不会输出签名段。
+
+推荐传入只包含 token 的文件：
+
+```console
+dcx jwt inspect /path/to/token
+```
+
+省略路径或使用 `-` 时从 stdin 读取，避免把 token 放入 shell 历史和进程参数：
+
+```console
+pbpaste | dcx jwt inspect
+dcx jwt inspect - < /path/to/token
+```
+
 ### `dcx skill`
 
 用于把项目自带的 `dcx-cli` skill 安装到 Agent skills 目录。首次安装需要显式执行，之后 skill 会随实际运行的 `dcx` 自动保持同步。
