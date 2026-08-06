@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use dcx::{AnyResult, completion, git, skill, sort_file, uniq_any_order};
+use dcx::{AnyResult, completion, git, jwt, skill, sort_file, uniq_any_order};
 use size::Size;
 
 /// 文本处理、Git 仓库维护与 Coding Agent 辅助工具集。
@@ -59,6 +59,12 @@ enum Commands {
         #[command(subcommand)]
         subcommand: GitCommands,
     },
+    /// 查看 JSON Web Token 的内容。
+    #[command(about = "Inspect JSON Web Tokens")]
+    Jwt {
+        #[command(subcommand)]
+        subcommand: JwtCommands,
+    },
     /// 管理 dcx 自带的 Agent skill。
     #[command(about = "Manage the bundled dcx Agent skill")]
     Skill {
@@ -72,6 +78,17 @@ enum GitCommands {
     /// 清理 upstream 已消失且内容已经合入 base 的本地分支。
     #[command(about = "Delete obsolete local branches whose upstream is gone")]
     Trim(TrimArguments),
+}
+
+#[derive(Debug, Subcommand)]
+enum JwtCommands {
+    /// 解码 JWT header 与 claims，但不验证签名。
+    #[command(about = "Decode a JWT without verifying its signature")]
+    Inspect {
+        /// JWT 文件；省略或使用 - 时从 stdin 读取
+        #[arg(help = "JWT file, or - to read from standard input")]
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -199,6 +216,25 @@ fn main() -> AnyResult {
                 arguments.update,
                 arguments.yes,
             ),
+        },
+        Commands::Jwt {
+            subcommand: JwtCommands::Inspect { path },
+        } => match path.as_deref() {
+            Some(path) if path.as_os_str() != "-" => {
+                if path
+                    .to_str()
+                    .is_some_and(|value| value.split('.').count() == 3)
+                {
+                    anyhow::bail!(
+                        "expected a JWT file path, not a token; use standard input to avoid exposing the token"
+                    );
+                }
+                let file = std::fs::File::open(path).map_err(|error| {
+                    anyhow::anyhow!("failed to open {}: {error}", path.display())
+                })?;
+                jwt::inspect(file, io::BufWriter::new(io::stdout()))
+            }
+            _ => jwt::inspect(io::stdin().lock(), io::BufWriter::new(io::stdout())),
         },
         Commands::Skill { subcommand } => match subcommand {
             SkillCommands::Install { force } => skill::install(force),

@@ -1,6 +1,6 @@
 ---
 name: dcx-cli
-description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重，以及安全清理 Git 仓库中远端 upstream 已消失且内容已合入目标分支的本地 branch。适用于用户要求文本原地排序、无需预排序的行去重或计数、清理已合并 branch、管理 git trim exclude 规则、安装动态 shell 补全，或管理 dcx 自带 skill 的场景。
+description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重、查看 JWT，以及安全清理 Git 仓库中远端 upstream 已消失且内容已合入目标分支的本地 branch。适用于用户要求文本原地排序、无需预排序的行去重或计数、查看 JWT header/claims、清理已合并 branch、管理 git trim exclude 规则、安装动态 shell 补全，或管理 dcx 自带 skill 的场景。
 ---
 
 # dcx CLI
@@ -11,6 +11,12 @@ description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重，以及安
 
 - 使用 `dcx sort` 原地排序 UTF-8 文本文件；需要时启用去重或空白裁剪。
 - 使用 `dcx uniq` 对 stdin 中的行做无需预排序的全局去重或计数，并将结果写到 stdout。
+
+## JWT 查看
+
+- 使用 `dcx jwt inspect [PATH]` 查看 JWT header、注册 claims 与自定义 claims。
+- 该命令只解码内容，不验证签名，也不输出签名段。
+- 优先传入 token 文件，或通过 stdin 输入；不要把 token 本身作为命令参数，避免泄露到 shell 历史与进程列表。
 
 ## Git branch 清理
 

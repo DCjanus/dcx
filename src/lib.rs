@@ -8,6 +8,7 @@ use tempfile::NamedTempFile;
 
 pub mod completion;
 pub mod git;
+pub mod jwt;
 pub mod skill;
 
 pub type AnyResult<T = ()> = anyhow::Result<T>;
