@@ -31,7 +31,7 @@ crossterm = "0.28.1"
 gix = { version = "0.86.0", default-features = false, features = ["basic", "sha1", "pack-cache-lru-dynamic", "comfort"] }
 globset = "0.4.19"
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
-ratatui = "0.29.0"
+ratatui = "0.30.2"
 serde_json = "1.0.151"
 size = "0.5.0"
 tempfile = "3.27.0"
