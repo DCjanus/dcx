@@ -119,17 +119,16 @@ fn resolve_audit_bases(repo: &Repository) -> AnyResult<Vec<Base>> {
         bases.insert(target_name, target);
     }
 
-    if let Some(head_name) = repo.head_name()? {
-        if let Some(upstream) =
+    if let Some(head_name) = repo.head_name()?
+        && let Some(upstream) =
             repo.branch_remote_tracking_ref_name(head_name.as_ref(), Direction::Fetch)
-        {
-            let upstream = upstream?;
-            if let Ok(mut reference) = repo.find_reference(upstream.as_ref()) {
-                bases.insert(
-                    upstream.shorten().to_str_lossy().into_owned(),
-                    reference.peel_to_id()?.detach(),
-                );
-            }
+    {
+        let upstream = upstream?;
+        if let Ok(mut reference) = repo.find_reference(upstream.as_ref()) {
+            bases.insert(
+                upstream.shorten().to_str_lossy().into_owned(),
+                reference.peel_to_id()?.detach(),
+            );
         }
     }
     Ok(bases

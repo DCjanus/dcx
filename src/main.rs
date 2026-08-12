@@ -164,10 +164,10 @@ fn main() -> AnyResult {
     let command = parsed
         .subcommand
         .expect("clap requires either a subcommand or --install-completion");
-    if !matches!(command, Commands::Skill { .. }) {
-        if let Err(error) = skill::auto_update() {
-            eprintln!("warning: failed to update dcx-cli skill: {error:#}");
-        }
+    if !matches!(command, Commands::Skill { .. })
+        && let Err(error) = skill::auto_update()
+    {
+        eprintln!("warning: failed to update dcx-cli skill: {error:#}");
     }
 
     match command {
