@@ -79,6 +79,8 @@ fn jwt_subcommand_decodes_header_claims_and_numeric_dates() {
     assert!(stdout.contains("2029-12-31T23:00:00Z"));
     assert!(stdout.contains("Expires at"));
     assert!(stdout.contains("2030-01-01T00:00:00Z"));
+    assert!(stdout.contains('╭'));
+    assert!(stdout.contains('╰'));
     assert!(!stdout.contains("c2lnbmF0dXJl"));
 }
 
