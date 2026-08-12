@@ -28,8 +28,11 @@ base64 = "0.23.1"
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = { version = "4.6.7", features = ["unstable-dynamic"] }
 comfy-table = "=7.2.1"
+crossterm = "0.28.1"
+gix = { version = "0.86.0", default-features = false, features = ["basic", "comfort", "sha1", "pack-cache-lru-dynamic"] }
 globset = "0.4.19"
 jiff = { version = "0.2.35", default-features = false, features = ["std"] }
+ratatui = "0.29.0"
 serde_json = "1.0.151"
 size = "0.5.0"
 tempfile = "3.27.0"
