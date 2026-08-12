@@ -75,9 +75,9 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum GitCommands {
-    /// 清理 upstream 已消失且内容已经合入 base 的本地分支。
-    #[command(about = "Delete obsolete local branches whose upstream is gone")]
-    Trim(TrimArguments),
+    /// 在交互式 TUI 中审计并批量删除本地分支。
+    #[command(about = "Audit and delete local branches in an interactive TUI")]
+    Branches(BranchesArguments),
 }
 
 #[derive(Debug, Subcommand)]
@@ -92,36 +92,16 @@ enum JwtCommands {
 }
 
 #[derive(Debug, Args)]
-struct TrimArguments {
-    /// 只预览，不删除分支
-    #[arg(long, help = "Preview results without deleting branches")]
-    dry_run: bool,
+struct BranchesArguments {
     /// 删除前更新并 prune 远端 refs
     #[arg(long, help = "Fetch and prune all remotes before checking branches")]
     update: bool,
-    /// 跳过删除确认
-    #[arg(short, long, help = "Delete listed branches without confirmation")]
-    yes: bool,
-    /// 用于判断内容是否已合入的目标分支
-    #[arg(
-        long,
-        action = clap::ArgAction::Append,
-        help = "Base branch used to determine whether changes were merged"
-    )]
-    base: Vec<String>,
-    /// 本次运行额外排除的 branch name 或 glob
-    #[arg(
-        long,
-        action = clap::ArgAction::Append,
-        help = "Branch name or glob to exclude for this run"
-    )]
-    exclude: Vec<String>,
     #[command(subcommand)]
-    subcommand: Option<TrimCommands>,
+    subcommand: Option<BranchesCommands>,
 }
 
 #[derive(Debug, Subcommand)]
-enum TrimCommands {
+enum BranchesCommands {
     /// 管理当前仓库的持久化 exclude 规则。
     #[command(about = "Manage repository-local branch exclusion rules")]
     Exclude {
@@ -184,10 +164,10 @@ fn main() -> AnyResult {
     let command = parsed
         .subcommand
         .expect("clap requires either a subcommand or --install-completion");
-    if !matches!(command, Commands::Skill { .. }) {
-        if let Err(error) = skill::auto_update() {
-            eprintln!("warning: failed to update dcx-cli skill: {error:#}");
-        }
+    if !matches!(command, Commands::Skill { .. })
+        && let Err(error) = skill::auto_update()
+    {
+        eprintln!("warning: failed to update dcx-cli skill: {error:#}");
     }
 
     match command {
@@ -202,20 +182,14 @@ fn main() -> AnyResult {
             Ok(())
         }
         Commands::Git {
-            subcommand: GitCommands::Trim(arguments),
+            subcommand: GitCommands::Branches(arguments),
         } => match arguments.subcommand {
-            Some(TrimCommands::Exclude { subcommand }) => match subcommand {
+            Some(BranchesCommands::Exclude { subcommand }) => match subcommand {
                 ExcludeCommands::Add { patterns, current } => git::exclude_add(&patterns, current),
                 ExcludeCommands::Remove { patterns } => git::exclude_remove(&patterns),
                 ExcludeCommands::List => git::exclude_list(),
             },
-            None => git::trim(
-                &arguments.base,
-                &arguments.exclude,
-                arguments.dry_run,
-                arguments.update,
-                arguments.yes,
-            ),
+            None => git::branches(arguments.update),
         },
         Commands::Jwt {
             subcommand: JwtCommands::Inspect { path },

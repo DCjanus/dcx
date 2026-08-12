@@ -5,6 +5,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    assignees:
+      - DCjanus
     open-pull-requests-limit: 5
     groups:
       routine-cargo-updates:
@@ -18,6 +20,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    assignees:
+      - DCjanus
     open-pull-requests-limit: 5
     groups:
       routine-github-actions-updates:

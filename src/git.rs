@@ -1,36 +1,63 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
-use std::io::{self, ErrorKind, IsTerminal, Write};
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Output, Stdio};
+use std::io::{ErrorKind, IsTerminal, Write};
+use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::{Context, bail};
+use gix::bstr::ByteSlice;
+use gix::remote::Direction;
+use gix::{ObjectId, Repository};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use tempfile::NamedTempFile;
 
 use crate::AnyResult;
 
-const EXCLUDE_FILE: &str = "dcx/trim-exclude";
+const EXCLUDE_FILE: &str = "dcx/branches-exclude";
 
 #[derive(Debug)]
 struct Branch {
     name: String,
-    object: String,
+    object: ObjectId,
     upstream: String,
     tracking: String,
     worktree: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum DeleteKind {
+#[derive(Debug, Clone)]
+struct Base {
+    name: String,
+    object: ObjectId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeleteKind {
     Merged,
     Equivalent,
 }
 
-#[derive(Debug)]
-struct DeleteCandidate {
-    name: String,
-    kind: DeleteKind,
+#[derive(Debug, Clone)]
+pub(crate) struct BaseAudit {
+    pub(crate) name: String,
+    pub(crate) ahead: usize,
+    pub(crate) behind: usize,
+    pub(crate) absorption: Option<DeleteKind>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BranchAudit {
+    pub(crate) name: String,
+    pub(crate) short_object: String,
+    pub(crate) upstream: String,
+    pub(crate) tracking: String,
+    pub(crate) worktree: String,
+    pub(crate) protected_reason: Option<String>,
+    pub(crate) author: String,
+    pub(crate) committed_at: String,
+    pub(crate) subject: String,
+    pub(crate) diff_base: String,
+    pub(crate) diffstat: String,
+    pub(crate) bases: Vec<BaseAudit>,
 }
 
 #[derive(Debug, Default)]
@@ -39,349 +66,376 @@ struct ExcludeConfig {
     patterns: BTreeSet<String>,
 }
 
-pub fn trim(
-    bases: &[String],
-    command_line_excludes: &[String],
-    dry_run: bool,
-    update: bool,
-    yes: bool,
-) -> AnyResult {
-    ensure_repository()?;
+pub fn branches(update: bool) -> AnyResult {
+    let mut repo = discover_repository()?;
     if update {
-        git_checked(&["fetch", "--all", "--prune"])?;
+        // Fetch remains an explicit network operation. All local inspection and mutation below
+        // is performed through gix without spawning Git processes.
+        git_fetch()?;
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        bail!("interactive branch selection requires a terminal");
     }
 
-    let bases = resolve_bases(bases)?;
-    let base_local_names = base_local_names(&bases)?;
-    let mut patterns = load_exclude_config()?.patterns;
-    for pattern in command_line_excludes {
-        validate_pattern(pattern)?;
-        patterns.insert(pattern.to_owned());
+    let audits = branch_audits(&mut repo)?;
+    let selected = crate::git_branches_tui::select_branches(audits)?;
+    if selected.is_empty() {
+        return Ok(());
     }
-    let excludes = build_glob_set(&patterns)?;
-    let branches = local_branches()?;
-    let mut candidates = Vec::new();
+    delete_selected(&repo, &selected)?;
+    println!("Deleted {} local branches:", selected.len());
+    for branch in selected {
+        println!("  {branch}");
+    }
+    Ok(())
+}
 
-    for branch in branches {
-        if base_local_names.contains(&branch.name) {
-            print_status("SKIP", &branch.name, "base branch");
-            continue;
-        }
-        if !branch.worktree.is_empty() {
-            print_status("SKIP", &branch.name, "checked out in a worktree");
-            continue;
-        }
-        if excludes.is_match(&branch.name) {
-            print_status("SKIP", &branch.name, "excluded by rule");
-            continue;
-        }
-        if branch.upstream.is_empty() {
-            print_status("SKIP", &branch.name, "no upstream");
-            continue;
-        }
-        if branch.tracking != "[gone]" {
-            print_status("SKIP", &branch.name, "upstream exists");
-            continue;
-        }
+fn branch_audits(repo: &mut Repository) -> AnyResult<Vec<BranchAudit>> {
+    repo.object_cache_size_if_unset(8 * 1024 * 1024);
+    let bases = resolve_audit_bases(repo)?;
+    let base_local_names = base_local_names(&bases);
+    let excludes = build_glob_set(&load_exclude_config(repo)?.patterns)?;
+    let worktrees = checked_out_branches(repo)?;
 
-        let mut absorbed = None;
-        for base in &bases {
-            if let Some(kind) = changes_absorbed(&branch, base)? {
-                absorbed = Some((kind, base));
-                break;
-            }
+    local_branches(repo, &worktrees)?
+        .into_iter()
+        .map(|branch| audit_branch(repo, branch, &bases, &base_local_names, &excludes))
+        .collect()
+}
+
+fn resolve_audit_bases(repo: &Repository) -> AnyResult<Vec<Base>> {
+    let mut bases = BTreeMap::<String, ObjectId>::new();
+    for reference in repo.references()?.remote_branches()? {
+        let mut reference = reference.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let name = reference.name().as_bstr().to_str_lossy().into_owned();
+        if !name.ends_with("/HEAD") {
+            continue;
         }
-        if let Some((kind, base)) = absorbed {
-            let reason = match kind {
-                DeleteKind::Merged => format!("merged into {base}"),
-                DeleteKind::Equivalent => format!("changes already present in {base}"),
-            };
-            print_status("DELETE", &branch.name, &reason);
-            candidates.push(DeleteCandidate {
-                name: branch.name,
-                kind,
-            });
-        } else {
-            print_status(
-                "KEEP",
-                &branch.name,
-                "upstream gone but unique changes remain",
+        let target_name = match reference.target() {
+            gix::refs::TargetRef::Symbolic(name) => name.shorten().to_str_lossy().into_owned(),
+            gix::refs::TargetRef::Object(_) => name.trim_end_matches("/HEAD").to_owned(),
+        };
+        let target = reference.peel_to_id()?.detach();
+        bases.insert(target_name, target);
+    }
+
+    if let Some(head_name) = repo.head_name()?
+        && let Some(upstream) =
+            repo.branch_remote_tracking_ref_name(head_name.as_ref(), Direction::Fetch)
+    {
+        let upstream = upstream?;
+        if let Ok(mut reference) = repo.find_reference(upstream.as_ref()) {
+            bases.insert(
+                upstream.shorten().to_str_lossy().into_owned(),
+                reference.peel_to_id()?.detach(),
             );
         }
     }
+    Ok(bases
+        .into_iter()
+        .map(|(name, object)| Base { name, object })
+        .collect())
+}
 
-    if dry_run || candidates.is_empty() {
-        return Ok(());
+fn audit_branch(
+    repo: &Repository,
+    branch: Branch,
+    bases: &[Base],
+    base_local_names: &HashSet<String>,
+    excludes: &GlobSet,
+) -> AnyResult<BranchAudit> {
+    let protected_reason = if base_local_names.contains(&branch.name) {
+        Some("base branch".to_owned())
+    } else if !branch.worktree.is_empty() {
+        Some("checked out in a worktree".to_owned())
+    } else if excludes.is_match(&branch.name) {
+        Some("excluded by rule".to_owned())
+    } else {
+        None
+    };
+
+    let commit = repo.find_commit(branch.object)?;
+    let author = commit.author()?.name.to_str_lossy().into_owned();
+    let committed_at = commit
+        .time()?
+        .format(gix::date::time::format::ISO8601_STRICT)?;
+    let subject = commit.message()?.title.to_str_lossy().trim().to_owned();
+    let short_object = commit.short_id()?.to_string();
+
+    let mut base_audits = Vec::new();
+    for base in bases {
+        let (ahead, behind, merge_base) = ahead_behind(repo, branch.object, base.object)?;
+        let absorption = changes_absorbed(repo, branch.object, base.object, merge_base)?;
+        base_audits.push(BaseAudit {
+            name: base.name.clone(),
+            ahead,
+            behind,
+            absorption,
+        });
     }
-    if !yes {
-        if !io::stdin().is_terminal() {
-            bail!("confirmation requires a terminal; use --yes to delete listed branches");
-        }
-        print!("Delete {} local branches? [y/N] ", candidates.len());
-        io::stdout()
-            .flush()
-            .context("failed to flush confirmation")?;
-        let mut answer = String::new();
-        io::stdin()
-            .read_line(&mut answer)
-            .context("failed to read confirmation")?;
-        if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
-            return Ok(());
-        }
+    let diff_base = base_audits
+        .iter()
+        .find(|base| base.absorption.is_some())
+        .or_else(|| {
+            base_audits
+                .iter()
+                .min_by_key(|base| base.ahead.saturating_add(base.behind))
+        })
+        .map(|base| base.name.clone());
+    let diffstat = match diff_base
+        .as_deref()
+        .and_then(|name| bases.iter().find(|base| base.name == name))
+    {
+        Some(base) => branch_diffstat(repo, branch.object, base.object)?
+            .unwrap_or_else(|| "与审计基准没有共同历史".to_owned()),
+        None => "没有可用的审计基准".to_owned(),
+    };
+
+    Ok(BranchAudit {
+        name: branch.name,
+        short_object,
+        upstream: branch.upstream,
+        tracking: branch.tracking,
+        worktree: branch.worktree,
+        protected_reason,
+        author,
+        committed_at,
+        subject,
+        diff_base: diff_base.unwrap_or_else(|| "base".to_owned()),
+        diffstat,
+        bases: base_audits,
+    })
+}
+
+fn ahead_behind(
+    repo: &Repository,
+    branch: ObjectId,
+    base: ObjectId,
+) -> AnyResult<(usize, usize, Option<ObjectId>)> {
+    let merge_base = repo.merge_base(branch, base).ok().map(|id| id.detach());
+    let ahead = revision_count_excluding(repo, branch, base)?;
+    let behind = revision_count_excluding(repo, base, branch)?;
+    Ok((ahead, behind, merge_base))
+}
+
+fn revision_count_excluding(
+    repo: &Repository,
+    tip: ObjectId,
+    hidden: ObjectId,
+) -> AnyResult<usize> {
+    repo.rev_walk([tip])
+        .with_hidden([hidden])
+        .all()?
+        .try_fold(0_usize, |count, item| item.map(|_| count + 1))
+        .map_err(Into::into)
+}
+
+fn changes_absorbed(
+    repo: &Repository,
+    branch: ObjectId,
+    base: ObjectId,
+    merge_base: Option<ObjectId>,
+) -> AnyResult<Option<DeleteKind>> {
+    let Some(merge_base) = merge_base else {
+        return Ok(None);
+    };
+    if merge_base == branch {
+        return Ok(Some(DeleteKind::Merged));
     }
 
-    for candidate in candidates {
-        let flag = match candidate.kind {
-            DeleteKind::Merged => "-d",
-            DeleteKind::Equivalent => "-D",
-        };
-        git_checked(&["branch", flag, "--", &candidate.name])?;
+    let branch_tree = repo.find_commit(branch)?.tree_id()?.detach();
+    for item in repo.rev_walk([base]).with_hidden([merge_base]).all()? {
+        let commit = item?.object()?;
+        if commit.tree_id()?.detach() == branch_tree {
+            return Ok(Some(DeleteKind::Equivalent));
+        }
+    }
+    Ok(None)
+}
+
+fn branch_diffstat(
+    repo: &Repository,
+    branch: ObjectId,
+    base: ObjectId,
+) -> AnyResult<Option<String>> {
+    let Ok(merge_base) = repo.merge_base(branch, base) else {
+        return Ok(None);
+    };
+    let old_tree = repo.find_commit(merge_base)?.tree()?;
+    let new_tree = repo.find_commit(branch)?.tree()?;
+    let files = repo.diff_tree_to_tree(&old_tree, &new_tree, None)?.len();
+    let mut changes = old_tree.changes()?;
+    changes.options(|options| {
+        options.track_rewrites(None);
+    });
+    let stats = changes.stats(&new_tree)?;
+    let binaries = files.saturating_sub(stats.files_changed as usize);
+    Ok(Some(if files == 0 {
+        "无内容差异".to_owned()
+    } else {
+        let mut summary = format!(
+            "{files} 个文件变更，新增 {} 行，删除 {} 行",
+            stats.lines_added, stats.lines_removed
+        );
+        if binaries > 0 {
+            summary.push_str(&format!("，其中 {binaries} 个二进制文件"));
+        }
+        summary
+    }))
+}
+
+fn delete_selected(repo: &Repository, branches: &[String]) -> AnyResult {
+    let base_local_names = base_local_names(&resolve_audit_bases(repo)?);
+    let excludes = build_glob_set(&load_exclude_config(repo)?.patterns)?;
+    let worktrees = checked_out_branches(repo)?;
+    for branch in branches {
+        if base_local_names.contains(branch) {
+            bail!("refusing to delete base branch {branch}");
+        }
+        if let Some(path) = worktrees.get(branch) {
+            bail!("refusing to delete branch {branch}; checked out at {path}");
+        }
+        if excludes.is_match(branch) {
+            bail!("refusing to delete excluded branch {branch}");
+        }
+        let reference_name = format!("refs/heads/{branch}");
+        repo.find_reference(reference_name.as_str())?
+            .delete()
+            .with_context(|| format!("failed to delete local branch {branch}"))?;
     }
     Ok(())
 }
 
 pub fn exclude_add(patterns: &[String], current: bool) -> AnyResult {
-    ensure_repository()?;
-    let mut config = load_exclude_config()?;
+    let repo = discover_repository()?;
+    let mut config = load_exclude_config(&repo)?;
     for pattern in patterns {
         validate_pattern(pattern)?;
         config.patterns.insert(pattern.to_owned());
     }
     if current {
-        let branch = git_stdout(&["symbolic-ref", "--quiet", "--short", "HEAD"])
-            .context("HEAD is detached; --current requires a checked-out branch")?;
+        let branch = repo
+            .head_name()?
+            .context("HEAD is detached; --current requires a checked-out branch")?
+            .shorten()
+            .to_str_lossy()
+            .into_owned();
         validate_pattern(&branch)?;
         config.patterns.insert(branch);
     }
     if patterns.is_empty() && !current {
         bail!("provide at least one pattern or use --current");
     }
-    write_exclude_config(&config)
+    write_exclude_config(&repo, &config)
 }
 
 pub fn exclude_remove(patterns: &[String]) -> AnyResult {
-    ensure_repository()?;
-    let mut config = load_exclude_config()?;
+    let repo = discover_repository()?;
+    let mut config = load_exclude_config(&repo)?;
     for pattern in patterns {
         config.patterns.remove(pattern);
     }
-    write_exclude_config(&config)
+    write_exclude_config(&repo, &config)
 }
 
 pub fn exclude_list() -> AnyResult {
-    ensure_repository()?;
-    for pattern in load_exclude_config()?.patterns {
+    let repo = discover_repository()?;
+    for pattern in load_exclude_config(&repo)?.patterns {
         println!("{pattern}");
     }
     Ok(())
 }
 
-fn ensure_repository() -> AnyResult {
-    git_stdout(&["rev-parse", "--git-dir"])
-        .context("not inside a Git repository")
-        .map(|_| ())
+fn discover_repository() -> AnyResult<Repository> {
+    gix::discover(".").context("not inside a Git repository")
 }
 
-fn resolve_bases(requested: &[String]) -> AnyResult<Vec<String>> {
-    let bases = if requested.is_empty() {
-        git_stdout(&["for-each-ref", "--format=%(symref:short)", "refs/remotes"])?
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-    } else {
-        requested.to_vec()
-    };
-    if bases.is_empty() {
-        bail!("failed to determine a base branch; pass --base explicitly");
-    }
-    for base in &bases {
-        rev_parse_commit(base).with_context(|| format!("invalid base branch {base}"))?;
-    }
-    Ok(bases)
-}
-
-fn base_local_names(bases: &[String]) -> AnyResult<HashSet<String>> {
-    let mut names = HashSet::new();
-    for base in bases {
-        let full_name = git_stdout(&["rev-parse", "--symbolic-full-name", base])?;
-        if let Some(name) = full_name.strip_prefix("refs/heads/") {
-            names.insert(name.to_owned());
-        } else if let Some(remote_name) = full_name.strip_prefix("refs/remotes/") {
-            if let Some((_, name)) = remote_name.split_once('/') {
-                names.insert(name.to_owned());
-            }
-        }
-    }
-    Ok(names)
-}
-
-fn local_branches() -> AnyResult<Vec<Branch>> {
-    let output = git_stdout(&[
-        "for-each-ref",
-        "--format=%(refname:short)%00%(objectname)%00%(upstream:short)%00%(upstream:track)%00%(worktreepath)",
-        "refs/heads",
-    ])?;
-    output
-        .lines()
-        .map(|line| {
-            let fields = line.split('\0').collect::<Vec<_>>();
-            if fields.len() != 5 {
-                bail!("unexpected git for-each-ref output");
-            }
-            Ok(Branch {
-                name: fields[0].to_owned(),
-                object: fields[1].to_owned(),
-                upstream: fields[2].to_owned(),
-                tracking: fields[3].to_owned(),
-                worktree: fields[4].to_owned(),
-            })
-        })
+fn base_local_names(bases: &[Base]) -> HashSet<String> {
+    bases
+        .iter()
+        .filter_map(|base| base.name.split_once('/').map(|(_, name)| name.to_owned()))
         .collect()
 }
 
-fn changes_absorbed(branch: &Branch, base: &str) -> AnyResult<Option<DeleteKind>> {
-    let base_object = rev_parse_commit(base)?;
-    let ancestor = git_status(&["merge-base", "--is-ancestor", &branch.object, &base_object])?;
-    if ancestor.success() {
-        return Ok(Some(DeleteKind::Merged));
-    }
-    if ancestor.code() != Some(1) {
-        bail!("git merge-base failed for {} and {base}", branch.name);
-    }
-
-    if let Some(merged_tree) = merge_tree(&base_object, &branch.object)? {
-        let base_tree = revision_tree(&base_object)?;
-        if merged_tree == base_tree {
-            return Ok(Some(DeleteKind::Equivalent));
-        }
-    }
-
-    if changes_historically_absorbed(branch, &base_object)? {
-        return Ok(Some(DeleteKind::Equivalent));
-    }
-
-    Ok(None)
-}
-
-fn changes_historically_absorbed(branch: &Branch, base_object: &str) -> AnyResult<bool> {
-    let merge_base = git_stdout(&["merge-base", &branch.object, base_object])?;
-    let branch_patch_ids = git_patch_ids(&[
-        "-c",
-        "diff.external=",
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--full-index",
-        "--binary",
-        &merge_base,
-        &branch.object,
-    ])?;
-    let Some((branch_patch_id, _)) = branch_patch_ids.first() else {
-        return Ok(false);
-    };
-
-    let excluded_merge_base = format!("^{merge_base}");
-    let historical_patch_ids = git_patch_ids(&[
-        "-c",
-        "diff.external=",
-        "log",
-        "--first-parent",
-        "--no-merges",
-        "--format=medium",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--full-index",
-        "--binary",
-        "-p",
-        base_object,
-        &excluded_merge_base,
-    ])?;
-
-    for (patch_id, commit) in historical_patch_ids {
-        if patch_id != *branch_patch_id {
-            continue;
-        }
-        let parent = rev_parse_commit(&format!("{commit}^"))?;
-        let Some(merged_tree) = merge_tree(&parent, &branch.object)? else {
-            continue;
+fn local_branches(
+    repo: &Repository,
+    worktrees: &HashMap<String, String>,
+) -> AnyResult<Vec<Branch>> {
+    let mut branches = Vec::new();
+    for reference in repo.references()?.local_branches()?.peeled()? {
+        let reference = reference.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let name = reference.name().shorten().to_str_lossy().into_owned();
+        let object = reference.id().detach();
+        let upstream_ref = reference
+            .remote_tracking_ref_name(Direction::Fetch)
+            .transpose()?;
+        let upstream = upstream_ref
+            .as_ref()
+            .map(|name| name.shorten().to_str_lossy().into_owned())
+            .unwrap_or_default();
+        let tracking = match upstream_ref {
+            Some(upstream_ref) => match repo.try_find_reference(upstream_ref.as_ref())? {
+                Some(mut upstream_reference) => {
+                    let upstream_object = upstream_reference.peel_to_id()?.detach();
+                    let (ahead, behind, _) = ahead_behind(repo, object, upstream_object)?;
+                    tracking_label(ahead, behind)
+                }
+                None => "[gone]".to_owned(),
+            },
+            None => String::new(),
         };
-        if merged_tree == revision_tree(&commit)? {
-            return Ok(true);
-        }
+        branches.push(Branch {
+            name: name.clone(),
+            object,
+            upstream,
+            tracking,
+            worktree: worktrees.get(&name).cloned().unwrap_or_default(),
+        });
     }
-
-    Ok(false)
+    branches.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(branches)
 }
 
-fn merge_tree(left: &str, right: &str) -> AnyResult<Option<String>> {
-    let arguments = ["merge-tree", "--write-tree", left, right];
-    let merge = git_output(&arguments)?;
-    if !merge.status.success() {
-        if merge.status.code() == Some(1) {
-            return Ok(None);
-        }
-        return Err(git_failure(&arguments, &merge));
+fn tracking_label(ahead: usize, behind: usize) -> String {
+    match (ahead, behind) {
+        (0, 0) => String::new(),
+        (ahead, 0) => format!("[ahead {ahead}]"),
+        (0, behind) => format!("[behind {behind}]"),
+        (ahead, behind) => format!("[ahead {ahead}, behind {behind}]"),
     }
-    let merged_tree = String::from_utf8(merge.stdout)
-        .context("git merge-tree returned non-UTF-8 output")?
-        .lines()
-        .next()
-        .context("git merge-tree returned no tree")?
-        .trim()
-        .to_owned();
-    Ok(Some(merged_tree))
 }
 
-fn revision_tree(revision: &str) -> AnyResult<String> {
-    git_stdout(&["rev-parse", &format!("{revision}^{{tree}}")])
+fn checked_out_branches(repo: &Repository) -> AnyResult<HashMap<String, String>> {
+    let mut result = HashMap::new();
+    add_checked_out_branch(repo, &mut result)?;
+    for proxy in repo.worktrees()? {
+        let path = proxy.base().ok();
+        let linked = proxy.into_repo_with_possibly_inaccessible_worktree()?;
+        add_checked_out_branch_with_path(&linked, path, &mut result)?;
+    }
+    Ok(result)
 }
 
-fn git_patch_ids(arguments: &[&str]) -> AnyResult<Vec<(String, String)>> {
-    let mut producer = Command::new("git")
-        .args(arguments)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to run git {}", arguments.join(" ")))?;
-    let stdout = producer
-        .stdout
-        .take()
-        .context("git returned no stdout pipe")?;
-    let patch_arguments = ["patch-id", "--stable"];
-    let patch_output = Command::new("git")
-        .args(patch_arguments)
-        .stdin(Stdio::from(stdout))
-        .output()
-        .context("failed to run git patch-id --stable")?;
-    let producer_output = producer
-        .wait_with_output()
-        .with_context(|| format!("failed to wait for git {}", arguments.join(" ")))?;
-    if !producer_output.status.success() {
-        return Err(git_failure(arguments, &producer_output));
-    }
-    if !patch_output.status.success() {
-        return Err(git_failure(&patch_arguments, &patch_output));
-    }
-
-    String::from_utf8(patch_output.stdout)
-        .context("git patch-id returned non-UTF-8 output")?
-        .lines()
-        .map(|line| {
-            let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() != 2 {
-                bail!("unexpected git patch-id output");
-            }
-            Ok((fields[0].to_owned(), fields[1].to_owned()))
-        })
-        .collect()
+fn add_checked_out_branch(repo: &Repository, result: &mut HashMap<String, String>) -> AnyResult {
+    add_checked_out_branch_with_path(repo, repo.workdir().map(PathBuf::from), result)
 }
 
-fn load_exclude_config() -> AnyResult<ExcludeConfig> {
-    let path = exclude_path()?;
+fn add_checked_out_branch_with_path(
+    repo: &Repository,
+    path: Option<PathBuf>,
+    result: &mut HashMap<String, String>,
+) -> AnyResult {
+    if let (Some(name), Some(path)) = (repo.head_name()?, path) {
+        result.insert(
+            name.shorten().to_str_lossy().into_owned(),
+            path.display().to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn load_exclude_config(repo: &Repository) -> AnyResult<ExcludeConfig> {
+    let path = exclude_path(repo);
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(ExcludeConfig::default()),
@@ -406,8 +460,8 @@ fn load_exclude_config() -> AnyResult<ExcludeConfig> {
     Ok(config)
 }
 
-fn write_exclude_config(config: &ExcludeConfig) -> AnyResult {
-    let path = exclude_path()?;
+fn write_exclude_config(repo: &Repository, config: &ExcludeConfig) -> AnyResult {
+    let path = exclude_path(repo);
     let parent = path.parent().context("exclude file has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
     let mut contents = String::new();
@@ -441,9 +495,8 @@ fn write_exclude_config(config: &ExcludeConfig) -> AnyResult {
     Ok(())
 }
 
-fn exclude_path() -> AnyResult<PathBuf> {
-    let common = git_stdout(&["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
-    Ok(Path::new(&common).join(EXCLUDE_FILE))
+fn exclude_path(repo: &Repository) -> PathBuf {
+    repo.common_dir().join(EXCLUDE_FILE)
 }
 
 fn validate_pattern(pattern: &str) -> AnyResult {
@@ -464,51 +517,158 @@ fn build_glob_set(patterns: &BTreeSet<String>) -> AnyResult<GlobSet> {
     builder.build().context("failed to build exclude patterns")
 }
 
-fn rev_parse_commit(revision: &str) -> AnyResult<String> {
-    git_stdout(&["rev-parse", "--verify", &format!("{revision}^{{commit}}")])
-}
-
-fn print_status(status: &str, branch: &str, reason: &str) {
-    println!("{status:<6} {branch}  {reason}");
-}
-
-fn git_stdout(arguments: &[&str]) -> AnyResult<String> {
-    let output = git_output(arguments)?;
-    if !output.status.success() {
-        return Err(git_failure(arguments, &output));
-    }
-    Ok(String::from_utf8(output.stdout)
-        .context("git returned non-UTF-8 output")?
-        .trim()
-        .to_owned())
-}
-
-fn git_checked(arguments: &[&str]) -> AnyResult {
-    let output = git_output(arguments)?;
+fn git_fetch() -> AnyResult {
+    let output = Command::new("git")
+        .args(["fetch", "--all", "--prune"])
+        .output()
+        .context("failed to run git fetch --all --prune")?;
     if output.status.success() {
         Ok(())
     } else {
-        Err(git_failure(arguments, &output))
+        bail!(
+            "git fetch --all --prune failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
     }
 }
 
-fn git_status(arguments: &[&str]) -> AnyResult<ExitStatus> {
-    Ok(git_output(arguments)?.status)
-}
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::process::Command;
 
-fn git_output(arguments: &[&str]) -> AnyResult<Output> {
-    Command::new("git")
-        .args(arguments)
-        .output()
-        .with_context(|| format!("failed to run git {}", arguments.join(" ")))
-}
+    use super::*;
 
-fn git_failure(arguments: &[&str], output: &Output) -> anyhow::Error {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::anyhow!(
-        "git {} failed with {}: {}",
-        arguments.join(" "),
-        output.status,
-        stderr.trim()
-    )
+    fn git(directory: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(directory)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn repository() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        git(root.path(), &["init", "--quiet", "--initial-branch=main"]);
+        git(root.path(), &["config", "user.name", "Test User"]);
+        git(root.path(), &["config", "user.email", "test@example.com"]);
+        fs::write(root.path().join("file.txt"), "base\n").unwrap();
+        git(root.path(), &["add", "file.txt"]);
+        git(root.path(), &["commit", "--quiet", "-m", "base"]);
+        root
+    }
+
+    #[test]
+    fn recognizes_regularly_merged_branches() {
+        let root = repository();
+        git(root.path(), &["switch", "--quiet", "-c", "topic"]);
+        fs::write(root.path().join("file.txt"), "topic\n").unwrap();
+        git(root.path(), &["commit", "--quiet", "-am", "topic"]);
+        let topic = git(root.path(), &["rev-parse", "HEAD"])
+            .parse::<ObjectId>()
+            .unwrap();
+        git(root.path(), &["switch", "--quiet", "main"]);
+        git(root.path(), &["merge", "--quiet", "--no-ff", "topic"]);
+        let base = git(root.path(), &["rev-parse", "HEAD"])
+            .parse::<ObjectId>()
+            .unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        let merge_base = repo.merge_base(topic, base).ok().map(|id| id.detach());
+        assert_eq!(
+            changes_absorbed(&repo, topic, base, merge_base).unwrap(),
+            Some(DeleteKind::Merged)
+        );
+    }
+
+    #[test]
+    fn recognizes_squash_merges_with_an_exact_historical_tree() {
+        let root = repository();
+        git(root.path(), &["switch", "--quiet", "-c", "topic"]);
+        fs::write(root.path().join("file.txt"), "topic\n").unwrap();
+        git(root.path(), &["commit", "--quiet", "-am", "topic"]);
+        let topic = git(root.path(), &["rev-parse", "HEAD"])
+            .parse::<ObjectId>()
+            .unwrap();
+        git(root.path(), &["switch", "--quiet", "main"]);
+        git(root.path(), &["merge", "--quiet", "--squash", "topic"]);
+        git(root.path(), &["commit", "--quiet", "-m", "squash topic"]);
+        let base = git(root.path(), &["rev-parse", "HEAD"])
+            .parse::<ObjectId>()
+            .unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        let merge_base = repo.merge_base(topic, base).ok().map(|id| id.detach());
+        assert_eq!(
+            changes_absorbed(&repo, topic, base, merge_base).unwrap(),
+            Some(DeleteKind::Equivalent)
+        );
+    }
+
+    #[test]
+    fn reports_a_configured_but_missing_upstream_as_gone() {
+        let root = repository();
+        git(root.path(), &["remote", "add", "origin", "."]);
+        git(root.path(), &["config", "branch.main.remote", "origin"]);
+        git(
+            root.path(),
+            &["config", "branch.main.merge", "refs/heads/main"],
+        );
+
+        let repo = gix::open(root.path()).unwrap();
+        let branches = local_branches(&repo, &HashMap::new()).unwrap();
+        assert_eq!(branches[0].upstream, "origin/main");
+        assert_eq!(branches[0].tracking, "[gone]");
+    }
+
+    #[test]
+    fn discovers_the_remote_default_branch_as_an_audit_base() {
+        let root = repository();
+        git(root.path(), &["remote", "add", "origin", "."]);
+        git(root.path(), &["fetch", "--quiet", "origin", "main"]);
+        git(
+            root.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+
+        let repo = gix::open(root.path()).unwrap();
+        let bases = resolve_audit_bases(&repo).unwrap();
+        assert_eq!(bases.len(), 1);
+        assert_eq!(bases[0].name, "origin/main");
+        assert!(base_local_names(&bases).contains("main"));
+    }
+
+    #[test]
+    fn deletes_an_unprotected_ref_but_refuses_the_checked_out_branch() {
+        let root = repository();
+        git(root.path(), &["branch", "topic"]);
+        let repo = gix::open(root.path()).unwrap();
+
+        delete_selected(&repo, &["topic".to_owned()]).unwrap();
+        assert!(
+            repo.try_find_reference("refs/heads/topic")
+                .unwrap()
+                .is_none()
+        );
+
+        let error = delete_selected(&repo, &["main".to_owned()]).unwrap_err();
+        assert!(error.to_string().contains("checked out"));
+        assert!(
+            repo.try_find_reference("refs/heads/main")
+                .unwrap()
+                .is_some()
+        );
+    }
 }

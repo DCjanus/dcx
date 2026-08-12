@@ -14,9 +14,29 @@
 
 用于不依赖预排序的全局去重，避免经典 `sort | uniq` 流程中额外的排序开销。
 
-### `dcx git trim`
+### `dcx git branches`
 
-用于清理远端 upstream 已消失、且内容已经合入目标分支的本地 tracking branch，并保护当前分支、base、worktree 与仓库级 exclude 规则。该子命令需要 Git 2.38 或更高版本。
+用于在交互式 TUI 中审计并批量删除本地 branch。界面默认显示全部本地 branch，可按 `g` 切换为只看 upstream 已消失的 branch；左侧独立展示“正常”“丢失”或“未设”跟踪状态，以及“已合并”“等价”“待复核”或“锁定”审计状态。使用方向键移动、空格选择，右侧展示 upstream、保护状态、最后提交、相对审计 base 的领先/落后提交数、内容吸收判断与 diff 统计。按回车后会显示最终删除清单，再次回车才通过 `gix` 事务删除本地 ref。
+
+当前 branch、其它 worktree 正在使用的 branch、远端默认 base，以及匹配 repository-local exclude 规则的 branch 会显示为锁定状态，不能选择。自动分析只提供审计信息，不会自动选择或删除 branch。仓库发现、ref/upstream/worktree 读取、提交图审计、diff 统计和本地 ref 删除均由 `gix` 在进程内串行完成；该子命令需要支持交互输入的终端。
+
+“已合并”表示 branch tip 是审计 base 的祖先；“等价”表示 base 在共同祖先之后出现过与 branch tip 完全相同的 tree。经过 rebase、cherry-pick 或解决冲突后仅部分等价的 branch 会保守显示为“待复核”，由用户结合 diff 信息决定是否删除。
+
+常用按键：
+
+| 按键 | 操作 |
+| --- | --- |
+| `↑` / `↓`、`j` / `k` | 移动光标 |
+| `Space` | 选择或取消当前 branch |
+| `g` | 切换全部 branch / 仅 upstream gone |
+| `a` | 选择或取消全部可见且未锁定的 branch |
+| `x` | 清空选择 |
+| `Enter` | 查看删除确认；确认页再次按下后执行 |
+| `Esc` / `q` | 返回或退出 |
+
+需要刷新远端 refs 时显式使用 `dcx git branches --update`；只有这个显式网络操作仍会调用 `git fetch --all --prune`。使用 `dcx git branches exclude add|remove|list` 管理仓库级硬保护规则。
+
+> **Breaking change：** 原 `dcx git trim` 已移除，不提供兼容 alias；请改用 `dcx git branches`。旧的 `.git/dcx/trim-exclude` 不再读取，需要通过 `dcx git branches exclude add` 重新添加规则。
 
 ### `dcx jwt inspect`
 
@@ -53,10 +73,10 @@ cargo binstall --force --git https://github.com/DCjanus/dcx dcx
 
 预编译包覆盖 x86_64 Linux、Intel 与 Apple Silicon macOS，以及 x86_64 与 ARM64 Windows。项目只维护持续移动的 `latest` Release，重复安装时需要使用 `--force` 获取最新构建。
 
-如需从源码安装，请使用 Rust 1.85 或更高版本：
+如需从源码安装，请使用最新的 Rust nightly toolchain：
 
 ```console
-cargo install --force --git https://github.com/DCjanus/dcx --locked dcx
+cargo +nightly install --force --git https://github.com/DCjanus/dcx --locked dcx
 ```
 
 `dcx` 会安装到 Cargo 的二进制目录。
@@ -69,7 +89,7 @@ cargo install --force --git https://github.com/DCjanus/dcx --locked dcx
 just check
 ```
 
-底层命令只依赖 stable Rust：
+底层命令使用最新的 Rust nightly toolchain：
 
 ```console
 cargo machete

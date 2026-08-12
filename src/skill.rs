@@ -185,12 +185,12 @@ fn resolve_path(path: &Path) -> AnyResult<PathBuf> {
         return fs::canonicalize(path)
             .with_context(|| format!("failed to resolve {}", path.display()));
     }
-    if let Some(parent) = path.parent() {
-        if parent.exists() {
-            let parent = fs::canonicalize(parent)
-                .with_context(|| format!("failed to resolve {}", parent.display()))?;
-            return Ok(parent.join(path.file_name().unwrap_or_default()));
-        }
+    if let Some(parent) = path.parent()
+        && parent.exists()
+    {
+        let parent = fs::canonicalize(parent)
+            .with_context(|| format!("failed to resolve {}", parent.display()))?;
+        return Ok(parent.join(path.file_name().unwrap_or_default()));
     }
     Ok(path.to_path_buf())
 }
