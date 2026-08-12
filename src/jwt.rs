@@ -142,6 +142,7 @@ fn write_table<W: Write>(writer: &mut W, title: &str, rows: Vec<(Cell, Cell)>) -
     let mut table = Table::new();
     table
         .load_style(UTF8_FULL_CONDENSED.with_rounded_corners())
+        .set_truncation_indicator("...")
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(vec![
             Cell::new(title).add_attribute(Attribute::Bold),
