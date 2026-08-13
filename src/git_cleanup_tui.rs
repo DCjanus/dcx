@@ -235,7 +235,7 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" dcx git branches "),
+                        .title(" 本地分支清理 "),
                 ),
             area,
         );
@@ -274,7 +274,7 @@ fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     };
     let title = Line::from(vec![
         Span::styled(
-            " dcx git branches ",
+            " 本地分支清理 ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)

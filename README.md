@@ -14,7 +14,7 @@
 
 用于不依赖预排序的全局去重，避免经典 `sort | uniq` 流程中额外的排序开销。
 
-### `dcx git branches`
+### `dcx git cleanup`
 
 用于在交互式 TUI 中审计并批量删除本地 branch。界面默认显示全部本地 branch，可按 `g` 切换为只看 upstream 已消失的 branch；左侧独立展示“正常”“丢失”或“未设”跟踪状态，以及“已合并”“等价”“待复核”或“锁定”审计状态。使用方向键移动、空格选择，右侧展示 upstream、保护状态、最后提交、相对审计 base 的领先/落后提交数、内容吸收判断与 diff 统计。按回车后会显示最终删除清单，再次回车才通过 `gix` 事务删除本地 ref。
 
@@ -34,9 +34,9 @@
 | `Enter` | 查看删除确认；确认页再次按下后执行 |
 | `Esc` / `q` | 返回或退出 |
 
-需要刷新远端 refs 时显式使用 `dcx git branches --update`；只有这个显式网络操作仍会调用 `git fetch --all --prune`。使用 `dcx git branches exclude add|remove|list` 管理仓库级硬保护规则。
+需要刷新远端 refs 时显式使用 `dcx git cleanup --update`；只有这个显式网络操作仍会调用 `git fetch --all --prune`。使用 `dcx git cleanup exclude add|remove|list` 管理仓库级硬保护规则。
 
-> **Breaking change：** 原 `dcx git trim` 已移除，不提供兼容 alias；请改用 `dcx git branches`。旧的 `.git/dcx/trim-exclude` 不再读取，需要通过 `dcx git branches exclude add` 重新添加规则。
+> **Breaking change：** 原 `dcx git branches` 已移除，不提供兼容 alias；请改用 `dcx git cleanup`。现有 exclude 规则继续生效，管理命令迁移为 `dcx git cleanup exclude add|remove|list`。
 
 ### `dcx jwt inspect`
 

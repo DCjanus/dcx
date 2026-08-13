@@ -77,7 +77,7 @@ enum Commands {
 enum GitCommands {
     /// 在交互式 TUI 中审计并批量删除本地分支。
     #[command(about = "Audit and delete local branches in an interactive TUI")]
-    Branches(BranchesArguments),
+    Cleanup(CleanupArguments),
 }
 
 #[derive(Debug, Subcommand)]
@@ -92,16 +92,16 @@ enum JwtCommands {
 }
 
 #[derive(Debug, Args)]
-struct BranchesArguments {
+struct CleanupArguments {
     /// 删除前更新并 prune 远端 refs
     #[arg(long, help = "Fetch and prune all remotes before checking branches")]
     update: bool,
     #[command(subcommand)]
-    subcommand: Option<BranchesCommands>,
+    subcommand: Option<CleanupCommands>,
 }
 
 #[derive(Debug, Subcommand)]
-enum BranchesCommands {
+enum CleanupCommands {
     /// 管理当前仓库的持久化 exclude 规则。
     #[command(about = "Manage repository-local branch exclusion rules")]
     Exclude {
@@ -182,14 +182,14 @@ fn main() -> AnyResult {
             Ok(())
         }
         Commands::Git {
-            subcommand: GitCommands::Branches(arguments),
+            subcommand: GitCommands::Cleanup(arguments),
         } => match arguments.subcommand {
-            Some(BranchesCommands::Exclude { subcommand }) => match subcommand {
+            Some(CleanupCommands::Exclude { subcommand }) => match subcommand {
                 ExcludeCommands::Add { patterns, current } => git::exclude_add(&patterns, current),
                 ExcludeCommands::Remove { patterns } => git::exclude_remove(&patterns),
                 ExcludeCommands::List => git::exclude_list(),
             },
-            None => git::branches(arguments.update),
+            None => git::cleanup(arguments.update),
         },
         Commands::Jwt {
             subcommand: JwtCommands::Inspect { path },

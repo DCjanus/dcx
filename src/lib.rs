@@ -8,7 +8,7 @@ use tempfile::NamedTempFile;
 
 pub mod completion;
 pub mod git;
-mod git_branches_tui;
+mod git_cleanup_tui;
 pub mod jwt;
 pub mod skill;
 
