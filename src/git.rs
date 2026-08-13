@@ -66,7 +66,7 @@ struct ExcludeConfig {
     patterns: BTreeSet<String>,
 }
 
-pub fn branches(update: bool) -> AnyResult {
+pub fn cleanup(update: bool) -> AnyResult {
     let mut repo = discover_repository()?;
     if update {
         // Fetch remains an explicit network operation. All local inspection and mutation below
@@ -78,7 +78,7 @@ pub fn branches(update: bool) -> AnyResult {
     }
 
     let audits = branch_audits(&mut repo)?;
-    let selected = crate::git_branches_tui::select_branches(audits)?;
+    let selected = crate::git_cleanup_tui::select_branches(audits)?;
     if selected.is_empty() {
         return Ok(());
     }
