@@ -33,6 +33,7 @@ description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重、查看 JW
 
 - 使用 `dcx cargo cleanup --dry-run` 先审计当前 workspace 的可回收空间；该模式不删除文件。
 - 中文交互界面把已卸载 rustc toolchain 的 artifact group 标为低风险并默认勾选，把超过阈值的 incremental cache 标为中风险且默认不勾选；两类候选都保留最终二进制。
+- 旧 toolchain 已卸载后，Cargo fingerprint 中的 rustc hash 无法还原为具体版本号；结合界面展示的“与已安装 toolchain 均不匹配”、fingerprint 数量和影响说明判断，不要把 hash 猜测成版本号。
 - 用户要求执行清理时，使用 `dcx cargo cleanup` 打开 TUI，由用户检查、调整选择并二次确认；不要代替用户操作 TUI 或绕过确认。
 - 只有用户明确要求非交互执行，并且已经审阅相同参数的 dry-run 结果时，才使用 `--yes`。
 - 清理会在删除前锁定相关 Cargo profile；目标正在构建时应停止并报告，不能用其它方式绕过锁保护。

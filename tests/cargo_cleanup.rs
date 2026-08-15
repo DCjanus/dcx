@@ -95,5 +95,6 @@ fn cleanup_dry_run_reports_without_removing_cache() {
     assert!(fingerprint.exists());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("低风险"));
-    assert!(stdout.contains("已卸载的 rustc toolchain"));
+    assert!(stdout.contains("与已安装 toolchain 均不匹配"));
+    assert!(stdout.contains("1 个旧 rustc fingerprint"));
 }

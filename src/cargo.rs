@@ -55,7 +55,9 @@ impl RiskLevel {
 
     pub(crate) fn explanation(self) -> &'static str {
         match self {
-            Self::Low => "当前环境已经无法复用这些产物，清理后通常没有额外代价。",
+            Self::Low => {
+                "Cargo 只保留旧编译器 hash，无法还原具体版本。删除不会影响当前已安装的工具链；以后重装同一旧工具链时需要重新编译。"
+            }
             Self::Medium => "缓存仅因长期未修改而入选，清理后下一次编译可能明显变慢。",
         }
     }
@@ -235,13 +237,16 @@ pub(crate) fn scan_target(
             .display()
             .to_string();
 
-        let stale_hashes = stale_artifact_hashes(&fingerprint_dir, installed_toolchains)?;
-        let paths = artifact_paths(profile_path, &stale_hashes)?;
+        let stale = stale_artifacts(&fingerprint_dir, installed_toolchains)?;
+        let paths = artifact_paths(profile_path, &stale.artifact_hashes)?;
         if !paths.is_empty() {
             candidates.push(CleanupCandidate {
                 kind: CandidateKind::Toolchain,
                 profile: profile.clone(),
-                reason: "由已卸载的 rustc toolchain 生成".to_owned(),
+                reason: format!(
+                    "与已安装 toolchain 均不匹配（{} 个旧 rustc fingerprint）",
+                    stale.rustc_fingerprints.len()
+                ),
                 size: paths.iter().map(|path| path_size(path)).sum(),
                 paths,
                 profile_path: profile_path.to_owned(),
@@ -305,11 +310,17 @@ fn find_fingerprint_dirs(
     Ok(())
 }
 
-fn stale_artifact_hashes(
+struct StaleArtifacts {
+    artifact_hashes: HashSet<String>,
+    rustc_fingerprints: HashSet<u64>,
+}
+
+fn stale_artifacts(
     fingerprint_dir: &Path,
     installed_toolchains: &HashSet<u64>,
-) -> AnyResult<HashSet<String>> {
+) -> AnyResult<StaleArtifacts> {
     let mut reusable = HashMap::<String, bool>::new();
+    let mut rustc_fingerprints = HashSet::new();
     for entry in fs::read_dir(fingerprint_dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
@@ -320,18 +331,25 @@ fn stale_artifact_hashes(
         let Some(hash) = hash_from_path_name(&name) else {
             continue;
         };
-        let installed = fingerprint_rustc(&entry.path())
+        let rustc = fingerprint_rustc(&entry.path());
+        let installed = rustc
             .map(|rustc| installed_toolchains.contains(&rustc))
             .unwrap_or(true);
+        if !installed && let Some(rustc) = rustc {
+            rustc_fingerprints.insert(rustc);
+        }
         reusable
             .entry(hash.to_owned())
             .and_modify(|value| *value |= installed)
             .or_insert(installed);
     }
-    Ok(reusable
-        .into_iter()
-        .filter_map(|(hash, installed)| (!installed).then_some(hash))
-        .collect())
+    Ok(StaleArtifacts {
+        artifact_hashes: reusable
+            .into_iter()
+            .filter_map(|(hash, installed)| (!installed).then_some(hash))
+            .collect(),
+        rustc_fingerprints,
+    })
 }
 
 fn fingerprint_rustc(directory: &Path) -> Option<u64> {

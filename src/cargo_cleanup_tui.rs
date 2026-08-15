@@ -256,16 +256,7 @@ fn render_list(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                 ("[ ]", Color::Gray)
             };
             let risk = candidate.kind.risk();
-            let risk_style = match risk {
-                RiskLevel::Low => Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-                RiskLevel::Medium => Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            };
+            let risk_style = risk_badge_style(risk);
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {marker} "), Style::default().fg(color)),
                 Span::styled(format!(" {} ", risk.label()), risk_style),
@@ -293,15 +284,28 @@ fn render_list(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                     .title(" 风险      类别      大小 · 构建配置 ")
                     .title_bottom(" 上/下 移动 · Space 选择 "),
             )
-            .highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(35, 45, 60))
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol(">"),
+            .highlight_style(cursor_style())
+            .highlight_symbol("▶ "),
         area,
         &mut state,
     );
+}
+
+fn risk_badge_style(risk: RiskLevel) -> Style {
+    match risk {
+        RiskLevel::Low => Style::default()
+            .fg(Color::Black)
+            .bg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        RiskLevel::Medium => Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    }
+}
+
+fn cursor_style() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
 fn render_details(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
@@ -472,5 +476,13 @@ mod tests {
             app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             Outcome::Delete
         );
+    }
+
+    #[test]
+    fn cursor_highlight_preserves_the_risk_badge_colors() {
+        let highlighted = risk_badge_style(RiskLevel::Low).patch(cursor_style());
+
+        assert_eq!(highlighted.fg, Some(Color::Black));
+        assert_eq!(highlighted.bg, Some(Color::Green));
     }
 }

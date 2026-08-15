@@ -44,6 +44,8 @@
 
 默认打开中文交互式 TUI，并用醒目的颜色标出风险等级。由已卸载 rustc toolchain 产生、当前环境无法复用的 artifact group 标为“低风险”并默认勾选；仅依据修改时间判断的 incremental cache 标为“中风险”且默认不勾选。用户可以逐项调整选择，按回车查看空间汇总，再次按下回车才执行删除。删除前会锁定相关 Cargo profile；若 Cargo 或 rustc 正在使用它，清理会被拒绝。
 
+Cargo fingerprint 只保存 rustc 版本字符串的 hash，已经卸载 toolchain 后无法从现有 target 元数据还原具体版本号。因此界面展示与已安装 toolchain 的匹配状态和旧 rustc fingerprint 数量，并明确说明删除影响：不会影响当前已安装的工具链；只有未来重新安装同一旧工具链时才需要重新编译。
+
 只查看可回收空间而不删除文件：
 
 ```console
