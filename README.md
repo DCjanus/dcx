@@ -38,6 +38,26 @@
 
 > **Breaking change：** 原 `dcx git branches` 已移除，不提供兼容 alias；请改用 `dcx git cleanup`。现有 exclude 规则继续生效，管理命令迁移为 `dcx git cleanup exclude add|remove|list`。
 
+### `dcx cargo cleanup`
+
+用于审计并清理当前 Cargo workspace 中低复用概率的 `target` 构建缓存。命令通过 `cargo metadata` 解析实际的 target directory，识别由已卸载 rustc toolchain 产生的 hashed artifact group，以及超过 30 天未修改的 incremental cache；不会删除没有 hash 的最终二进制。
+
+默认打开交互式 TUI，并预选全部高置信度候选项。可以逐项取消选择，按回车查看空间汇总，再次按下回车才执行删除。删除前会锁定相关 Cargo profile；若 Cargo 或 rustc 正在使用它，清理会被拒绝。
+
+只查看可回收空间而不删除文件：
+
+```console
+dcx cargo cleanup --dry-run
+```
+
+调整 incremental cache 的过期时间：
+
+```console
+dcx cargo cleanup --days 60
+```
+
+`--yes` 会跳过 TUI 并删除报告中的全部候选项，适合用户已经审阅过同参数 dry-run 输出后的非交互调用。
+
 ### `dcx jwt inspect`
 
 用于以人类可读的表格查看 JWT header 与 claims，包括 issuer、audience，以及转换为 UTC 时间的 `iat`、`nbf`、`exp`。该命令只解码内容，不验证签名，并且不会输出签名段。
