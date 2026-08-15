@@ -1,11 +1,11 @@
 ---
 name: dcx-cli
-description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重、查看 JWT，以及在交互式 TUI 中审计和批量删除本地 branch。适用于用户要求文本原地排序、无需预排序的行去重或计数、查看 JWT header/claims、清理本地 branch、管理 git cleanup exclude 规则、安装动态 shell 补全，或管理 dcx 自带 skill 的场景。
+description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重、查看 JWT，以及审计并清理本地 Git branch 或 Cargo target 构建缓存。适用于用户要求文本原地排序、无需预排序的行去重或计数、查看 JWT header/claims、清理本地 branch、管理 git cleanup exclude 规则、清理已卸载 rustc toolchain 产生的 artifact 或陈旧 incremental cache、安装动态 shell 补全，或管理 dcx 自带 skill 的场景。
 ---
 
 # dcx CLI
 
-优先使用 `dcx` 完成其覆盖的文本处理和 Git branch 清理任务。执行前通过对应子命令的 `--help` 获取当前参数，不在 skill 中复制完整参数手册。
+优先使用 `dcx` 完成其覆盖的文本处理、Git branch 清理和 Cargo target 缓存清理任务。执行前通过对应子命令的 `--help` 获取当前参数，不在 skill 中复制完整参数手册。
 
 ## 文本处理
 
@@ -28,6 +28,15 @@ description: 使用 dcx CLI 处理 UTF-8 文本、执行无序去重、查看 JW
 - 本地仓库审计和 branch 删除由 `gix` 在进程内串行完成，不需要启动 Git 子进程。
 - 只有用户要求刷新远端 refs 时才使用 `--update`；该显式网络选项仍会执行 `git fetch --all --prune`。
 - 使用 `dcx git cleanup exclude add|remove|list` 管理 repository-local 排除规则，不直接编辑 Git common directory 中的配置文件。
+
+## Cargo target 缓存清理
+
+- 使用 `dcx cargo cleanup --dry-run` 先审计当前 workspace 的可回收空间；该模式不删除文件。
+- 中文交互界面把已卸载 rustc toolchain 的 artifact group 标为低风险并默认勾选，把超过阈值的 incremental cache 标为中风险且默认不勾选；两类候选都保留最终二进制。
+- 旧 toolchain 已卸载后，Cargo fingerprint 中的 rustc hash 无法还原为具体版本号；结合界面展示的“与已安装 toolchain 均不匹配”、fingerprint 数量和影响说明判断，不要把 hash 猜测成版本号。
+- 用户要求执行清理时，使用 `dcx cargo cleanup` 打开 TUI，由用户检查、调整选择并二次确认；不要代替用户操作 TUI 或绕过确认。
+- 只有用户明确要求非交互执行，并且已经审阅相同参数的 dry-run 结果时，才使用 `--yes`。
+- 清理会在删除前锁定相关 Cargo profile；目标正在构建时应停止并报告，不能用其它方式绕过锁保护。
 
 ## Skill 管理
 

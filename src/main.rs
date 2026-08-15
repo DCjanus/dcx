@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use dcx::{AnyResult, completion, git, jwt, skill, sort_file, uniq_any_order};
+use dcx::{AnyResult, cargo, completion, git, jwt, skill, sort_file, uniq_any_order};
 use size::Size;
 
 /// 文本处理、Git 仓库维护与 Coding Agent 辅助工具集。
@@ -59,6 +59,12 @@ enum Commands {
         #[command(subcommand)]
         subcommand: GitCommands,
     },
+    /// 管理 Cargo 项目。
+    #[command(about = "管理 Cargo 项目")]
+    Cargo {
+        #[command(subcommand)]
+        subcommand: CargoCommands,
+    },
     /// 查看 JSON Web Token 的内容。
     #[command(about = "Inspect JSON Web Tokens")]
     Jwt {
@@ -81,6 +87,17 @@ enum GitCommands {
 }
 
 #[derive(Debug, Subcommand)]
+enum CargoCommands {
+    /// 审计并清理当前 workspace 的低复用概率构建缓存。
+    #[command(
+        about = "审计并清理当前 workspace 中的陈旧构建缓存",
+        disable_help_flag = true,
+        help_template = "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}"
+    )]
+    Cleanup(CargoCleanupArguments),
+}
+
+#[derive(Debug, Subcommand)]
 enum JwtCommands {
     /// 解码 JWT header 与 claims，但不验证签名。
     #[command(about = "Decode a JWT without verifying its signature")]
@@ -98,6 +115,33 @@ struct CleanupArguments {
     update: bool,
     #[command(subcommand)]
     subcommand: Option<CleanupCommands>,
+}
+
+#[derive(Debug, Args)]
+struct CargoCleanupArguments {
+    /// 将超过此天数未修改的 incremental cache 视为过期
+    #[arg(
+        long,
+        default_value_t = 30,
+        hide_default_value = true,
+        value_name = "天数",
+        help = "将超过此天数未修改的 incremental 缓存视为过期（默认：30）"
+    )]
+    days: u64,
+    /// 只展示候选项，不删除文件
+    #[arg(long, conflicts_with = "yes", help = "只展示清理候选项，不删除文件")]
+    dry_run: bool,
+    /// 跳过交互选择并删除全部候选项
+    #[arg(
+        short,
+        long,
+        conflicts_with = "dry_run",
+        help = "跳过选择界面并清理报告中的全部候选项"
+    )]
+    yes: bool,
+    /// 显示帮助
+    #[arg(short = 'h', long, action = clap::ArgAction::Help, help = "显示帮助")]
+    help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -191,6 +235,9 @@ fn main() -> AnyResult {
             },
             None => git::cleanup(arguments.update),
         },
+        Commands::Cargo {
+            subcommand: CargoCommands::Cleanup(arguments),
+        } => cargo::cleanup(arguments.days, arguments.dry_run, arguments.yes),
         Commands::Jwt {
             subcommand: JwtCommands::Inspect { path },
         } => match path.as_deref() {
