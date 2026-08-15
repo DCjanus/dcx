@@ -20,7 +20,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 use size::Size;
 
 use crate::AnyResult;
-use crate::cargo::CleanupCandidate;
+use crate::cargo::{CleanupCandidate, RiskLevel};
 
 type Tui = Terminal<CrosstermBackend<Stderr>>;
 
@@ -32,8 +32,8 @@ pub(crate) fn select_candidates(candidates: Vec<CleanupCandidate>) -> AnyResult<
     loop {
         terminal
             .draw(|frame| render(frame, &app))
-            .context("failed to draw Cargo cache selector")?;
-        let Event::Key(key) = event::read().context("failed to read terminal input")? else {
+            .context("无法绘制 Cargo 缓存选择界面")?;
+        let Event::Key(key) = event::read().context("无法读取终端输入")? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
@@ -48,11 +48,11 @@ pub(crate) fn select_candidates(candidates: Vec<CleanupCandidate>) -> AnyResult<
 }
 
 fn start_terminal() -> AnyResult<Tui> {
-    enable_raw_mode().context("failed to enable terminal raw mode")?;
+    enable_raw_mode().context("无法启用终端 raw mode")?;
     let mut stderr = io::stderr();
     if let Err(error) = execute!(stderr, EnterAlternateScreen, EnableMouseCapture, Hide) {
         let _ = disable_raw_mode();
-        return Err(error).context("failed to enter alternate screen");
+        return Err(error).context("无法进入终端备用屏幕");
     }
     match Terminal::new(CrosstermBackend::new(stderr)) {
         Ok(terminal) => Ok(terminal),
@@ -64,7 +64,7 @@ fn start_terminal() -> AnyResult<Tui> {
                 DisableMouseCapture,
                 Show
             );
-            Err(error).context("failed to initialize terminal")
+            Err(error).context("无法初始化终端")
         }
     }
 }
@@ -100,7 +100,13 @@ struct App {
 impl App {
     fn new(candidates: Vec<CleanupCandidate>) -> Self {
         Self {
-            selected: (0..candidates.len()).collect(),
+            selected: candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    (candidate.kind.risk() == RiskLevel::Low).then_some(index)
+                })
+                .collect(),
             candidates,
             cursor: 0,
             confirming: false,
@@ -183,12 +189,12 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
     let area = frame.area();
     if area.width < 72 || area.height < 18 {
         frame.render_widget(
-            Paragraph::new("Terminal is too small\nResize it to at least 72 x 18")
+            Paragraph::new("终端尺寸太小\n请调整到至少 72 x 18")
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(" Cargo cache cleanup "),
+                        .title(" Cargo 缓存清理 "),
                 ),
             area,
         );
@@ -219,14 +225,14 @@ fn render(frame: &mut ratatui::Frame<'_>, app: &App) {
 fn render_header(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let title = Line::from(vec![
         Span::styled(
-            " Cargo cache cleanup ",
+            " Cargo 缓存清理 ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(format!(
-            "  {} groups | {} selected | {} reclaimable",
+            "  {} 组候选 | 已选 {} 组 | 可释放 {}",
             app.candidates.len(),
             app.selected.len(),
             Size::from_bytes(app.selected_size())
@@ -249,14 +255,26 @@ fn render_list(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             } else {
                 ("[ ]", Color::Gray)
             };
+            let risk = candidate.kind.risk();
+            let risk_style = match risk {
+                RiskLevel::Low => Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+                RiskLevel::Medium => Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            };
             ListItem::new(Line::from(vec![
                 Span::styled(format!(" {marker} "), Style::default().fg(color)),
+                Span::styled(format!(" {} ", risk.label()), risk_style),
                 Span::styled(
-                    format!("{:<11}", candidate.kind.label()),
+                    format!(" {} ", candidate.kind.label()),
                     Style::default().fg(Color::Cyan),
                 ),
                 Span::raw(format!(
-                    "{}  {}",
+                    "{} · {}",
                     Size::from_bytes(candidate.size),
                     candidate.profile
                 )),
@@ -272,8 +290,8 @@ fn render_list(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Cache groups ")
-                    .title_bottom(" Up/Down move | Space toggle "),
+                    .title(" 风险      类别      大小 · 构建配置 ")
+                    .title_bottom(" 上/下 移动 · Space 选择 "),
             )
             .highlight_style(
                 Style::default()
@@ -290,45 +308,54 @@ fn render_details(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let Some(candidate) = app.current() else {
         return;
     };
+    let risk = candidate.kind.risk();
+    let risk_color = match risk {
+        RiskLevel::Low => Color::Green,
+        RiskLevel::Medium => Color::Yellow,
+    };
     let lines = vec![
-        Line::raw(format!("Profile   {}", candidate.profile)),
-        Line::raw(format!("Category  {}", candidate.kind.label())),
-        Line::raw(format!("Size      {}", Size::from_bytes(candidate.size))),
-        Line::raw(format!("Paths     {}", candidate.paths.len())),
+        Line::raw(format!("构建配置  {}", candidate.profile)),
+        Line::raw(format!("缓存类别  {}", candidate.kind.label())),
+        Line::from(vec![
+            Span::raw("风险等级  "),
+            Span::styled(
+                risk.label(),
+                Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::raw(format!("占用空间  {}", Size::from_bytes(candidate.size))),
+        Line::raw(format!("路径数量  {}", candidate.paths.len())),
         Line::raw(""),
-        Line::styled("Reason", Style::default().add_modifier(Modifier::BOLD)),
+        Line::styled("入选原因", Style::default().add_modifier(Modifier::BOLD)),
         Line::raw(&candidate.reason),
         Line::raw(""),
-        Line::styled(
-            "All selected data can be rebuilt by Cargo.",
-            Style::default().fg(Color::Yellow),
-        ),
+        Line::styled("风险说明", Style::default().add_modifier(Modifier::BOLD)),
+        Line::styled(risk.explanation(), Style::default().fg(risk_color)),
+        Line::raw("所有候选缓存均可由 Cargo 重新生成。"),
     ];
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Audit details "),
-        ),
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(" 审计详情 ")),
         area,
     );
 }
 
 fn render_footer(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let enter = if app.selected.is_empty() {
-        "disabled"
+        "不可用"
     } else {
-        "confirm"
+        "确认"
     };
     let help = Line::from(vec![
         Span::styled(" a ", key_style()),
-        Span::raw("all  "),
+        Span::raw("全选  "),
         Span::styled(" x ", key_style()),
-        Span::raw("clear  "),
+        Span::raw("清空  "),
         Span::styled(" Enter ", key_style()),
         Span::raw(format!("{enter}  ")),
         Span::styled(" q ", key_style()),
-        Span::raw("quit"),
+        Span::raw("退出"),
     ]);
     frame.render_widget(
         Paragraph::new(help)
@@ -351,7 +378,7 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     let lines = vec![
         Line::styled(
             format!(
-                "Remove {} cache groups ({})?",
+                "确认清理 {} 组缓存（{}）？",
                 app.selected.len(),
                 Size::from_bytes(app.selected_size())
             ),
@@ -360,14 +387,14 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
-        Line::raw("Cargo can rebuild this data, but the next build may be slower."),
-        Line::raw("Cleanup is refused while the target profile is active."),
+        Line::raw("Cargo 可以重新生成这些数据，但下一次构建可能变慢。"),
+        Line::raw("相关 target profile 正在使用时，dcx 会拒绝清理。"),
         Line::raw(""),
         Line::from(vec![
             Span::styled(" Enter ", key_style()),
-            Span::raw("remove     "),
+            Span::raw("清理     "),
             Span::styled(" Esc ", key_style()),
-            Span::raw("back"),
+            Span::raw("返回"),
         ])
         .alignment(Alignment::Center),
     ];
@@ -376,7 +403,7 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::LightRed))
-                .title(" Confirm cleanup "),
+                .title(" 确认清理 "),
         ),
         popup,
     );
@@ -422,14 +449,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_selecting_all_reclaimable_groups() {
+    fn defaults_to_selecting_only_low_risk_groups() {
         let app = App::new(vec![
             candidate(CandidateKind::Toolchain),
             candidate(CandidateKind::Incremental),
         ]);
 
-        assert_eq!(app.selected, BTreeSet::from([0, 1]));
-        assert_eq!(app.selected_size(), 20);
+        assert_eq!(app.selected, BTreeSet::from([0]));
+        assert_eq!(app.selected_size(), 10);
     }
 
     #[test]

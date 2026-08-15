@@ -5,6 +5,23 @@ use std::fs;
 use common::dcx;
 
 #[test]
+fn cleanup_help_is_in_chinese() {
+    let root = tempfile::tempdir().unwrap();
+    let output = dcx(&root.path().join("skills"))
+        .args(["cargo", "cleanup", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("用法："));
+    assert!(stdout.contains("选项："));
+    assert!(stdout.contains("显示帮助"));
+    assert!(!stdout.contains("Usage:"));
+    assert!(!stdout.contains("Print help"));
+}
+
+#[test]
 fn cleanup_removes_stale_cache_groups_but_keeps_final_binary() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
@@ -46,11 +63,10 @@ fn cleanup_removes_stale_cache_groups_but_keeps_final_binary() {
     assert!(!dependency.exists());
     assert!(!incremental.exists());
     assert!(final_binary.exists());
-    assert!(
-        String::from_utf8(output.stdout)
-            .unwrap()
-            .contains("Removed 3 cache paths")
-    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("低风险"));
+    assert!(stdout.contains("中风险"));
+    assert!(stdout.contains("已清理 3 个缓存路径"));
 }
 
 #[test]
@@ -78,6 +94,6 @@ fn cleanup_dry_run_reports_without_removing_cache() {
     assert!(output.status.success());
     assert!(fingerprint.exists());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("toolchain"));
-    assert!(stdout.contains("no longer installed"));
+    assert!(stdout.contains("低风险"));
+    assert!(stdout.contains("已卸载的 rustc toolchain"));
 }

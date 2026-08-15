@@ -42,7 +42,7 @@
 
 用于审计并清理当前 Cargo workspace 中低复用概率的 `target` 构建缓存。命令通过 `cargo metadata` 解析实际的 target directory，识别由已卸载 rustc toolchain 产生的 hashed artifact group，以及超过 30 天未修改的 incremental cache；不会删除没有 hash 的最终二进制。
 
-默认打开交互式 TUI，并预选全部高置信度候选项。可以逐项取消选择，按回车查看空间汇总，再次按下回车才执行删除。删除前会锁定相关 Cargo profile；若 Cargo 或 rustc 正在使用它，清理会被拒绝。
+默认打开中文交互式 TUI，并用醒目的颜色标出风险等级。由已卸载 rustc toolchain 产生、当前环境无法复用的 artifact group 标为“低风险”并默认勾选；仅依据修改时间判断的 incremental cache 标为“中风险”且默认不勾选。用户可以逐项调整选择，按回车查看空间汇总，再次按下回车才执行删除。删除前会锁定相关 Cargo profile；若 Cargo 或 rustc 正在使用它，清理会被拒绝。
 
 只查看可回收空间而不删除文件：
 

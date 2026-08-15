@@ -26,8 +26,37 @@ pub(crate) enum CandidateKind {
 impl CandidateKind {
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Toolchain => "toolchain",
-            Self::Incremental => "incremental",
+            Self::Toolchain => "旧工具链",
+            Self::Incremental => "增量缓存",
+        }
+    }
+
+    pub(crate) fn risk(self) -> RiskLevel {
+        match self {
+            Self::Toolchain => RiskLevel::Low,
+            Self::Incremental => RiskLevel::Medium,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum RiskLevel {
+    Low,
+    Medium,
+}
+
+impl RiskLevel {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Low => "低风险",
+            Self::Medium => "中风险",
+        }
+    }
+
+    pub(crate) fn explanation(self) -> &'static str {
+        match self {
+            Self::Low => "当前环境已经无法复用这些产物，清理后通常没有额外代价。",
+            Self::Medium => "缓存仅因长期未修改而入选，清理后下一次编译可能明显变慢。",
         }
     }
 }
@@ -46,7 +75,7 @@ pub(crate) struct CleanupCandidate {
 pub fn cleanup(days: u64, dry_run: bool, yes: bool) -> AnyResult {
     let target = resolve_target_directory()?;
     if !target.is_dir() {
-        println!("No Cargo target directory found at {}", target.display());
+        println!("未找到 Cargo target 目录：{}", target.display());
         return Ok(());
     }
 
@@ -54,7 +83,7 @@ pub fn cleanup(days: u64, dry_run: bool, yes: bool) -> AnyResult {
     let candidates = scan_target(&target, &installed, days)?;
     if candidates.is_empty() {
         println!(
-            "No stale Cargo target cache found at {} (incremental age: {days} days)",
+            "未在 {} 中发现可清理的 Cargo 缓存（incremental 阈值：{days} 天）",
             target.display()
         );
         return Ok(());
@@ -69,12 +98,12 @@ pub fn cleanup(days: u64, dry_run: bool, yes: bool) -> AnyResult {
         (0..candidates.len()).collect::<Vec<_>>()
     } else {
         if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
-            bail!("interactive cleanup requires a terminal; use --dry-run or --yes");
+            bail!("交互式清理需要终端；请改用 --dry-run 或 --yes");
         }
         cargo_cleanup_tui::select_candidates(candidates.clone())?
     };
     if selected.is_empty() {
-        println!("Nothing selected; no files were removed.");
+        println!("未选择任何缓存，没有清理文件。");
         return Ok(());
     }
 
@@ -98,14 +127,13 @@ pub fn cleanup(days: u64, dry_run: bool, yes: bool) -> AnyResult {
                 continue;
             }
             removed_size += path_size(path);
-            remove_path(path)
-                .with_context(|| format!("failed to remove stale cache {}", path.display()))?;
+            remove_path(path).with_context(|| format!("无法清理缓存 {}", path.display()))?;
             removed_paths += 1;
         }
     }
 
     println!(
-        "Removed {removed_paths} cache paths (approximately {}).",
+        "已清理 {removed_paths} 个缓存路径（约 {}）。",
         Size::from_bytes(removed_size)
     );
     Ok(())
@@ -116,19 +144,19 @@ fn resolve_target_directory() -> AnyResult<PathBuf> {
     let output = Command::new(cargo)
         .args(["metadata", "--no-deps", "--format-version", "1"])
         .output()
-        .context("failed to run cargo metadata")?;
+        .context("无法执行 cargo metadata")?;
     if !output.status.success() {
         bail!(
-            "cargo metadata failed: {}",
+            "cargo metadata 执行失败：{}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
     let metadata: Value =
-        serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata output")?;
+        serde_json::from_slice(&output.stdout).context("无法解析 cargo metadata 输出")?;
     let target = metadata
         .get("target_directory")
         .and_then(Value::as_str)
-        .context("cargo metadata did not return target_directory")?;
+        .context("cargo metadata 未返回 target_directory")?;
     Ok(PathBuf::from(target))
 }
 
@@ -163,10 +191,10 @@ fn installed_toolchain_hashes() -> AnyResult<HashSet<u64>> {
         let output = Command::new("rustc")
             .arg("-vV")
             .output()
-            .context("failed to run rustc -vV")?;
+            .context("无法执行 rustc -vV")?;
         if !output.status.success() {
             bail!(
-                "rustc -vV failed: {}",
+                "rustc -vV 执行失败：{}",
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
@@ -200,7 +228,7 @@ pub(crate) fn scan_target(
     for fingerprint_dir in fingerprint_dirs {
         let profile_path = fingerprint_dir
             .parent()
-            .context("fingerprint directory has no profile parent")?;
+            .context("fingerprint 目录缺少 profile 父目录")?;
         let profile = profile_path
             .strip_prefix(target)
             .unwrap_or(profile_path)
@@ -213,7 +241,7 @@ pub(crate) fn scan_target(
             candidates.push(CleanupCandidate {
                 kind: CandidateKind::Toolchain,
                 profile: profile.clone(),
-                reason: "built by a rustc toolchain that is no longer installed".to_owned(),
+                reason: "由已卸载的 rustc toolchain 生成".to_owned(),
                 size: paths.iter().map(|path| path_size(path)).sum(),
                 paths,
                 profile_path: profile_path.to_owned(),
@@ -226,7 +254,7 @@ pub(crate) fn scan_target(
             candidates.push(CleanupCandidate {
                 kind: CandidateKind::Incremental,
                 profile,
-                reason: format!("not modified for at least {incremental_days} days"),
+                reason: format!("至少 {incremental_days} 天未修改"),
                 size: paths.iter().map(|path| path_size(path)).sum(),
                 paths,
                 profile_path: profile_path.to_owned(),
@@ -235,8 +263,10 @@ pub(crate) fn scan_target(
     }
 
     candidates.sort_by(|left, right| {
-        left.profile
-            .cmp(&right.profile)
+        left.kind
+            .risk()
+            .cmp(&right.kind.risk())
+            .then(left.profile.cmp(&right.profile))
             .then(left.kind.cmp(&right.kind))
     });
     Ok(candidates)
@@ -258,7 +288,7 @@ fn find_fingerprint_dirs(
         return Ok(());
     }
     for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read target directory {}", directory.display()))?
+        .with_context(|| format!("无法读取 target 目录 {}", directory.display()))?
     {
         let entry = entry?;
         let file_type = entry.file_type()?;
@@ -395,20 +425,21 @@ fn path_size(path: &Path) -> u64 {
 
 fn print_report(target: &Path, candidates: &[CleanupCandidate], days: u64) -> AnyResult {
     let mut table = Table::new();
-    table.set_header(["Profile", "Category", "Size", "Paths", "Reason"]);
+    table.set_header(["构建配置", "风险", "类别", "大小", "路径数", "入选原因"]);
     for candidate in candidates {
         table.add_row([
             Cell::new(&candidate.profile),
+            Cell::new(candidate.kind.risk().label()),
             Cell::new(candidate.kind.label()),
             Cell::new(Size::from_bytes(candidate.size)),
             Cell::new(candidate.paths.len()),
             Cell::new(&candidate.reason),
         ]);
     }
-    writeln!(std::io::stdout(), "Target: {}", target.display())?;
+    writeln!(std::io::stdout(), "Target 目录：{}", target.display())?;
     writeln!(
         std::io::stdout(),
-        "Incremental cache threshold: {days} days\n{table}"
+        "Incremental 缓存过期阈值：{days} 天\n{table}"
     )?;
     Ok(())
 }
@@ -430,10 +461,10 @@ fn lock_profiles(candidates: &[&CleanupCandidate]) -> AnyResult<ProfileLocks> {
                 .create(true)
                 .truncate(false)
                 .open(&path)
-                .with_context(|| format!("failed to open Cargo lock {}", path.display()))?;
+                .with_context(|| format!("无法打开 Cargo 锁文件 {}", path.display()))?;
             FileExt::try_lock_exclusive(&file).with_context(|| {
                 format!(
-                    "Cargo target profile is active; refusing to clean {}",
+                    "Cargo target profile 正在使用，拒绝清理 {}",
                     profile.display()
                 )
             })?;
@@ -445,10 +476,7 @@ fn lock_profiles(candidates: &[&CleanupCandidate]) -> AnyResult<ProfileLocks> {
 
 fn ensure_cleanup_path(target: &Path, path: &Path) -> AnyResult {
     if path == target || !path.starts_with(target) {
-        bail!(
-            "refusing to remove path outside Cargo target: {}",
-            path.display()
-        );
+        bail!("拒绝删除 Cargo target 以外的路径：{}", path.display());
     }
     Ok(())
 }

@@ -60,7 +60,7 @@ enum Commands {
         subcommand: GitCommands,
     },
     /// 管理 Cargo 项目。
-    #[command(about = "Manage Cargo projects")]
+    #[command(about = "管理 Cargo 项目")]
     Cargo {
         #[command(subcommand)]
         subcommand: CargoCommands,
@@ -89,7 +89,11 @@ enum GitCommands {
 #[derive(Debug, Subcommand)]
 enum CargoCommands {
     /// 审计并清理当前 workspace 的低复用概率构建缓存。
-    #[command(about = "Audit and clean stale build cache in the current workspace")]
+    #[command(
+        about = "审计并清理当前 workspace 中的陈旧构建缓存",
+        disable_help_flag = true,
+        help_template = "{about-with-newline}\n用法：{usage}\n\n选项：\n{options}"
+    )]
     Cleanup(CargoCleanupArguments),
 }
 
@@ -119,25 +123,25 @@ struct CargoCleanupArguments {
     #[arg(
         long,
         default_value_t = 30,
-        value_name = "DAYS",
-        help = "Treat incremental caches older than this many days as stale"
+        hide_default_value = true,
+        value_name = "天数",
+        help = "将超过此天数未修改的 incremental 缓存视为过期（默认：30）"
     )]
     days: u64,
     /// 只展示候选项，不删除文件
-    #[arg(
-        long,
-        conflicts_with = "yes",
-        help = "Preview cleanup without removing files"
-    )]
+    #[arg(long, conflicts_with = "yes", help = "只展示清理候选项，不删除文件")]
     dry_run: bool,
     /// 跳过交互选择并删除全部候选项
     #[arg(
         short,
         long,
         conflicts_with = "dry_run",
-        help = "Remove every reported candidate without opening the selector"
+        help = "跳过选择界面并清理报告中的全部候选项"
     )]
     yes: bool,
+    /// 显示帮助
+    #[arg(short = 'h', long, action = clap::ArgAction::Help, help = "显示帮助")]
+    help: Option<bool>,
 }
 
 #[derive(Debug, Subcommand)]
