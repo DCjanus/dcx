@@ -123,6 +123,8 @@ cargo +nightly install --force --git https://github.com/DCjanus/dcx --locked dcx
 just check
 ```
 
+从当前 checkout 安装时运行 `just install`，或直接运行 `cargo +nightly install --path . --force --locked`。显式指定 nightly 可避免 `cargo install` 对隐式 toolchain 选择的提示。
+
 底层命令使用最新的 Rust nightly toolchain：
 
 ```console
