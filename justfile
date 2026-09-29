@@ -1,7 +1,7 @@
 default: install
 
 install: prepare
-    cargo +nightly install --path . -f --locked
+    cargo +stable install --path . -f --locked
 
 prepare:
     just fmt
