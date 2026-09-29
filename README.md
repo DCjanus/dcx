@@ -107,10 +107,10 @@ cargo binstall --force --git https://github.com/DCjanus/dcx dcx
 
 预编译包覆盖 x86_64 Linux、Intel 与 Apple Silicon macOS，以及 x86_64 与 ARM64 Windows。项目只维护持续移动的 `latest` Release，重复安装时需要使用 `--force` 获取最新构建。
 
-如需从源码安装，请使用最新的 Rust nightly toolchain：
+如需从源码安装，请使用最新的 Rust stable toolchain：
 
 ```console
-cargo +nightly install --force --git https://github.com/DCjanus/dcx --locked dcx
+cargo +stable install --force --git https://github.com/DCjanus/dcx --locked dcx
 ```
 
 `dcx` 会安装到 Cargo 的二进制目录。
@@ -123,13 +123,17 @@ cargo +nightly install --force --git https://github.com/DCjanus/dcx --locked dcx
 just check
 ```
 
-底层命令使用最新的 Rust nightly toolchain：
+从当前 checkout 安装时运行 `just install`，或直接运行 `cargo +stable install --path . --force --locked`。若本机 rustup 默认工具链为 stable，也可以省略 `+stable`。
+
+在 macOS 上从源码安装前，需运行 `rustup component add llvm-tools --toolchain stable`，供发布构建裁剪二进制使用。
+
+底层命令使用最新的 Rust stable toolchain：
 
 ```console
-cargo machete
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
+cargo +stable machete
+cargo +stable fmt --all -- --check
+cargo +stable clippy --locked --all-targets -- -D warnings
+cargo +stable test --locked --all-targets
 ```
 
 ## 许可证
