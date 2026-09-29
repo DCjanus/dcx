@@ -123,15 +123,17 @@ cargo +stable install --force --git https://github.com/DCjanus/dcx --locked dcx
 just check
 ```
 
-从当前 checkout 安装时运行 `just install`，或直接运行 `cargo +stable install --path . --force --locked`。显式指定 stable 可避免 `cargo install` 对隐式 toolchain 选择的提示。
+从当前 checkout 安装时运行 `just install`，或直接运行 `cargo +stable install --path . --force --locked`。若本机 rustup 默认工具链为 stable，也可以省略 `+stable`。
+
+在 macOS 上从源码安装前，需运行 `rustup component add llvm-tools --toolchain stable`，供发布构建裁剪二进制使用。
 
 底层命令使用最新的 Rust stable toolchain：
 
 ```console
-cargo machete
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
+cargo +stable machete
+cargo +stable fmt --all -- --check
+cargo +stable clippy --locked --all-targets -- -D warnings
+cargo +stable test --locked --all-targets
 ```
 
 ## 许可证
