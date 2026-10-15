@@ -173,10 +173,11 @@ fn worktree_audits(repo: &Repository) -> AnyResult<Vec<WorktreeAudit>> {
         &branch_audits,
     )?];
     for proxy in main_repo.worktrees()? {
+        let id = proxy.id()?;
         let path = proxy.base().with_context(|| {
             format!(
                 "failed to read linked worktree path for {}",
-                proxy.id().to_str_lossy()
+                id.to_str_lossy()
             )
         })?;
         let locked_reason = proxy
@@ -452,7 +453,7 @@ fn ahead_behind(
     branch: ObjectId,
     base: ObjectId,
 ) -> AnyResult<(usize, usize, Option<ObjectId>)> {
-    let merge_base = repo.merge_base(branch, base).ok().map(|id| id.detach());
+    let merge_base = repo.merge_base(branch, base)?.map(|id| id.detach());
     let ahead = revision_count_excluding(repo, branch, base)?;
     let behind = revision_count_excluding(repo, base, branch)?;
     Ok((ahead, behind, merge_base))
@@ -498,7 +499,7 @@ fn branch_diffstat(
     branch: ObjectId,
     base: ObjectId,
 ) -> AnyResult<Option<String>> {
-    let Ok(merge_base) = repo.merge_base(branch, base) else {
+    let Some(merge_base) = repo.merge_base(branch, base)? else {
         return Ok(None);
     };
     let old_tree = repo.find_commit(merge_base)?.tree()?;
@@ -807,6 +808,28 @@ mod tests {
     }
 
     #[test]
+    fn audits_branches_without_a_common_ancestor() {
+        let root = repository();
+        let base = git(root.path(), &["rev-parse", "HEAD"])
+            .parse::<ObjectId>()
+            .unwrap();
+        git(root.path(), &["checkout", "--quiet", "--orphan", "topic"]);
+        git(root.path(), &["commit", "--quiet", "-m", "unrelated"]);
+        let topic = git(root.path(), &["rev-parse", "HEAD"])
+            .parse::<ObjectId>()
+            .unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        let (ahead, behind, merge_base) = ahead_behind(&repo, topic, base).unwrap();
+        assert_eq!((ahead, behind, merge_base), (1, 1, None));
+        assert_eq!(
+            changes_absorbed(&repo, topic, base, merge_base).unwrap(),
+            None
+        );
+        assert_eq!(branch_diffstat(&repo, topic, base).unwrap(), None);
+    }
+
+    #[test]
     fn recognizes_regularly_merged_branches() {
         let root = repository();
         git(root.path(), &["switch", "--quiet", "-c", "topic"]);
@@ -822,7 +845,7 @@ mod tests {
             .unwrap();
 
         let repo = gix::open(root.path()).unwrap();
-        let merge_base = repo.merge_base(topic, base).ok().map(|id| id.detach());
+        let merge_base = repo.merge_base(topic, base).unwrap().map(|id| id.detach());
         assert_eq!(
             changes_absorbed(&repo, topic, base, merge_base).unwrap(),
             Some(DeleteKind::Merged)
@@ -846,7 +869,7 @@ mod tests {
             .unwrap();
 
         let repo = gix::open(root.path()).unwrap();
-        let merge_base = repo.merge_base(topic, base).ok().map(|id| id.detach());
+        let merge_base = repo.merge_base(topic, base).unwrap().map(|id| id.detach());
         assert_eq!(
             changes_absorbed(&repo, topic, base, merge_base).unwrap(),
             Some(DeleteKind::Equivalent)
