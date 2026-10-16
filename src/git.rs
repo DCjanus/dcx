@@ -356,7 +356,19 @@ fn resolve_audit_bases(repo: &Repository) -> AnyResult<Vec<Base>> {
             gix::refs::TargetRef::Symbolic(name) => name.shorten().to_str_lossy().into_owned(),
             gix::refs::TargetRef::Object(_) => name.trim_end_matches("/HEAD").to_owned(),
         };
-        let target = reference.peel_to_id()?.detach();
+        let target = match reference.peel_to_id() {
+            Ok(target) => target.detach(),
+            // 远端分支被删除后，HEAD 可能仍指向旧引用；仅跳过缺失引用，
+            // 不吞掉对象缺失、引用损坏或读取失败等错误。
+            Err(error)
+                if error
+                    .downcast_any_ref::<gix::refs::file::find::NotFound>()
+                    .is_some() =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         bases.insert(target_name, target);
     }
 
@@ -911,6 +923,101 @@ mod tests {
         assert_eq!(bases.len(), 1);
         assert_eq!(bases[0].name, "origin/main");
         assert!(base_local_names(&bases).contains("main"));
+    }
+
+    #[test]
+    fn audits_branches_with_a_dangling_remote_head_and_valid_bases() {
+        let root = repository();
+        git(root.path(), &["remote", "add", "origin", "."]);
+        git(root.path(), &["fetch", "--quiet", "origin", "main"]);
+        git(root.path(), &["branch", "--set-upstream-to=origin/main"]);
+        git(root.path(), &["branch", "fork"]);
+        git(root.path(), &["config", "branch.fork.remote", "origin"]);
+        git(
+            root.path(),
+            &["config", "branch.fork.merge", "refs/heads/fork"],
+        );
+        git(root.path(), &["remote", "add", "upstream", "."]);
+        git(root.path(), &["fetch", "--quiet", "upstream", "main"]);
+        git(
+            root.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/upstream/HEAD",
+                "refs/remotes/upstream/main",
+            ],
+        );
+        git(
+            root.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/fork",
+            ],
+        );
+
+        let mut repo = gix::open(root.path()).unwrap();
+        let audits = branch_audits(&mut repo).unwrap();
+        let fork = audits.iter().find(|audit| audit.name == "fork").unwrap();
+        assert_eq!(fork.tracking, "[gone]");
+        assert_eq!(
+            fork.bases
+                .iter()
+                .map(|base| base.name.as_str())
+                .collect::<Vec<_>>(),
+            ["origin/main", "upstream/main"]
+        );
+        let main = audits.iter().find(|audit| audit.name == "main").unwrap();
+        assert_eq!(main.protected_reason.as_deref(), Some("base branch"));
+        assert!(delete_selected(&repo, &["main".to_owned()]).is_err());
+        assert_eq!(
+            git(root.path(), &["symbolic-ref", "refs/remotes/origin/HEAD"]),
+            "refs/remotes/origin/fork"
+        );
+    }
+
+    #[test]
+    fn audits_branches_with_a_dangling_remote_head_without_other_bases() {
+        let root = repository();
+        git(root.path(), &["remote", "add", "origin", "."]);
+        git(root.path(), &["branch", "topic"]);
+        git(
+            root.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/fork",
+            ],
+        );
+
+        let mut repo = gix::open(root.path()).unwrap();
+        let audits = branch_audits(&mut repo).unwrap();
+        let topic = audits.iter().find(|audit| audit.name == "topic").unwrap();
+        assert!(topic.bases.is_empty());
+        assert_eq!(topic.diffstat, "没有可用的审计基准");
+        assert!(worktree_audits(&repo).unwrap()[0].bases.is_empty());
+    }
+
+    #[test]
+    fn rejects_a_remote_head_with_a_missing_object() {
+        let root = repository();
+        git(root.path(), &["remote", "add", "origin", "."]);
+        git(
+            root.path(),
+            &[
+                "symbolic-ref",
+                "refs/remotes/origin/HEAD",
+                "refs/remotes/origin/main",
+            ],
+        );
+        fs::write(
+            root.path().join(".git/refs/remotes/origin/main"),
+            "1111111111111111111111111111111111111111\n",
+        )
+        .unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        assert!(resolve_audit_bases(&repo).is_err());
     }
 
     #[test]

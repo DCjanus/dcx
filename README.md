@@ -40,6 +40,8 @@
 
 需要刷新远端 refs 时显式使用 `dcx git branch cleanup --update`；只有这个显式网络操作仍会调用 `git fetch --all --prune`。使用 `dcx git branch cleanup exclude add|remove|list` 管理仓库级硬保护规则。
 
+远端默认分支引用 `refs/remotes/<remote>/HEAD` 指向已不存在的分支时，会跳过该失效基准，继续使用其它有效的远端默认分支和当前 branch 的 upstream，不修改 Git 引用。没有可用基准时仍可审计 branch，但不会将其判定为已合并或等价，详情会提示“没有可用的审计基准”。
+
 > **Breaking change：** 原 `dcx git cleanup` 已移除，不提供兼容 alias；请改用 `dcx git branch cleanup`。现有 exclude 规则继续生效，管理命令迁移为 `dcx git branch cleanup exclude add|remove|list`。
 
 ### `dcx git worktree cleanup`
