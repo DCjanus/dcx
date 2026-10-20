@@ -138,20 +138,6 @@ cargo +stable clippy --locked --all-targets -- -D warnings
 cargo +stable test --locked --all-targets
 ```
 
-### GitHub Actions 依赖
-
-所有 workflow 使用兼容的大版本标签引用 Action，通过 GitHub 原生 [Actions lockfile](https://docs.github.com/en/actions/how-tos/secure-your-work/lock-workflow-dependencies) 固定实际执行的提交。Rust 工具链通过 `dtolnay/rust-toolchain@v1` 的 `toolchain: stable` 输入选择。
-
-新增或调整 Action 引用后，在仓库根目录使用官方扩展同步锁文件，保留大版本引用：
-
-```console
-gh extension install github/gh-actions-lock
-gh actions-lock --no-narrow
-gh actions-lock --verify
-```
-
-`.github/workflows/actions.lock` 由扩展生成，不手工编辑。CI 和发布流程均执行在线校验。Dependabot 会为已接入的 workflow 同步更新版本与锁定；每周依赖维护时还需审阅移动标签的上游变化，必要时运行 `gh actions-lock --relock --no-narrow` 刷新锁定。普通生成命令会保留已有锁定。
-
 ## 许可证
 
 [MIT](LICENSE)
