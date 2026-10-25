@@ -1231,6 +1231,7 @@ mod tests {
     #[test]
     fn cleans_only_selected_stale_registration_and_preserves_files_and_branches() {
         let root = repository();
+        git(root.path(), &["config", "core.autocrlf", "true"]);
         let checkouts = tempfile::tempdir().unwrap();
         let selected = checkouts.path().join("selected");
         let unselected = checkouts.path().join("unselected");
@@ -1250,6 +1251,7 @@ mod tests {
             fs::write(path.join("local.txt"), "keep local data\n").unwrap();
         }
 
+        let original_file = fs::read(selected.join("file.txt")).unwrap();
         let repo = gix::open(root.path()).unwrap();
         let audits = worktree_audits(&repo).unwrap();
         let audit = audits
@@ -1264,10 +1266,7 @@ mod tests {
             fs::read_to_string(selected.join("local.txt")).unwrap(),
             "keep local data\n"
         );
-        assert_eq!(
-            fs::read_to_string(selected.join("file.txt")).unwrap(),
-            "base\n"
-        );
+        assert_eq!(fs::read(selected.join("file.txt")).unwrap(), original_file);
         let remaining = repo.worktrees().unwrap();
         assert_eq!(remaining.len(), 1);
         assert!(paths_match(&remaining[0].base().unwrap(), &unselected));
