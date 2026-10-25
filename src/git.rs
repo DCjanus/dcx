@@ -63,6 +63,7 @@ pub(crate) struct BranchAudit {
 #[derive(Debug, Clone)]
 pub(crate) struct WorktreeAudit {
     pub(crate) path: PathBuf,
+    pub(crate) registration: Option<PathBuf>,
     pub(crate) branch: String,
     pub(crate) short_object: String,
     pub(crate) state: WorktreeState,
@@ -78,6 +79,13 @@ pub(crate) enum WorktreeState {
     Clean,
     Dirty,
     Missing,
+    Stale,
+}
+
+impl WorktreeState {
+    pub(crate) fn registration_only(self) -> bool {
+        matches!(self, Self::Missing | Self::Stale)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,7 +139,10 @@ pub fn worktree_cleanup() -> AnyResult {
     }
     remove_selected_worktrees(&repo, &selection.paths, selection.force)?;
     let mode = if selection.force { " with force" } else { "" };
-    println!("Removed {} linked worktrees{mode}:", selection.paths.len());
+    println!(
+        "Cleaned up {} linked worktrees{mode}:",
+        selection.paths.len()
+    );
     for path in selection.paths {
         println!("  {}", path.display());
     }
@@ -169,6 +180,7 @@ fn worktree_audits(repo: &Repository) -> AnyResult<Vec<WorktreeAudit>> {
     let mut audits = vec![audit_worktree(
         &main_repo,
         main_path,
+        None,
         Some(WorktreeProtection::Main),
         &branch_audits,
     )?];
@@ -180,9 +192,16 @@ fn worktree_audits(repo: &Repository) -> AnyResult<Vec<WorktreeAudit>> {
                 id.to_str_lossy()
             )
         })?;
-        let locked_reason = proxy
-            .lock_reason()
-            .map(|reason| WorktreeProtection::Locked(reason.to_str_lossy().into_owned()));
+        let registration = proxy.git_dir().to_owned();
+        let locked_reason = proxy.is_locked().then(|| {
+            WorktreeProtection::Locked(
+                proxy
+                    .lock_reason()
+                    .unwrap_or_default()
+                    .to_str_lossy()
+                    .into_owned(),
+            )
+        });
         let linked_repo = proxy
             .into_repo_with_possibly_inaccessible_worktree()
             .with_context(|| format!("failed to open linked worktree at {}", path.display()))?;
@@ -197,6 +216,7 @@ fn worktree_audits(repo: &Repository) -> AnyResult<Vec<WorktreeAudit>> {
         audits.push(audit_worktree(
             &linked_repo,
             path,
+            Some(registration),
             protected_reason,
             &branch_audits,
         )?);
@@ -208,21 +228,34 @@ fn worktree_audits(repo: &Repository) -> AnyResult<Vec<WorktreeAudit>> {
 fn audit_worktree(
     repo: &Repository,
     path: PathBuf,
+    registration: Option<PathBuf>,
     mut protection: Option<WorktreeProtection>,
     branches: &HashMap<String, BranchAudit>,
 ) -> AnyResult<WorktreeAudit> {
-    let exists = path.is_dir();
-    let dirty = exists && worktree_is_dirty(&path)?;
-    if dirty && protection.is_none() {
-        protection = Some(WorktreeProtection::Dirty);
-    }
-    let state = if !exists {
+    let missing_git_file = if registration.is_some() {
+        match fs::symlink_metadata(path.join(".git")) {
+            Ok(_) => false,
+            Err(error) if error.kind() == ErrorKind::NotFound => true,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect worktree at {}", path.display()));
+            }
+        }
+    } else {
+        false
+    };
+    let state = if !path.is_dir() {
         WorktreeState::Missing
-    } else if dirty {
+    } else if missing_git_file {
+        WorktreeState::Stale
+    } else if worktree_is_dirty(&path)? {
         WorktreeState::Dirty
     } else {
         WorktreeState::Clean
     };
+    if state == WorktreeState::Dirty && protection.is_none() {
+        protection = Some(WorktreeProtection::Dirty);
+    }
     let branch = repo
         .head_name()?
         .map(|name| name.shorten().to_str_lossy().into_owned())
@@ -234,6 +267,7 @@ fn audit_worktree(
 
     Ok(WorktreeAudit {
         path,
+        registration,
         branch,
         short_object,
         state,
@@ -271,6 +305,7 @@ fn worktree_is_dirty(path: &Path) -> AnyResult<bool> {
 
 fn remove_selected_worktrees(repo: &Repository, paths: &[PathBuf], force: bool) -> AnyResult {
     let audits = worktree_audits(repo)?;
+    let mut selected = Vec::with_capacity(paths.len());
     for path in paths {
         let audit = audits
             .iter()
@@ -288,6 +323,7 @@ fn remove_selected_worktrees(repo: &Repository, paths: &[PathBuf], force: bool) 
                 protection_description(protection)
             );
         }
+        selected.push(audit);
     }
 
     let main_repo = repo
@@ -296,7 +332,21 @@ fn remove_selected_worktrees(repo: &Repository, paths: &[PathBuf], force: bool) 
     let main_path = main_repo
         .workdir()
         .context("worktree cleanup requires a non-bare main repository")?;
-    for path in paths {
+    for audit in selected {
+        let path = &audit.path;
+        if audit.state.registration_only() {
+            let registration = audit
+                .registration
+                .as_ref()
+                .context("missing linked worktree registration")?;
+            fs::remove_dir_all(registration).with_context(|| {
+                format!(
+                    "failed to remove worktree registration for {}",
+                    path.display()
+                )
+            })?;
+            continue;
+        }
         let mut command = Command::new("git");
         command
             .arg("-C")
@@ -1176,6 +1226,166 @@ mod tests {
 
         assert!(error.to_string().contains("main worktree"));
         assert!(root.path().join(".git").is_dir());
+    }
+
+    #[test]
+    fn cleans_only_selected_stale_registration_and_preserves_files_and_branches() {
+        let root = repository();
+        let checkouts = tempfile::tempdir().unwrap();
+        let selected = checkouts.path().join("selected");
+        let unselected = checkouts.path().join("unselected");
+        for (name, path) in [("selected", &selected), ("unselected", &unselected)] {
+            git(
+                root.path(),
+                &[
+                    "worktree",
+                    "add",
+                    "--quiet",
+                    "-b",
+                    name,
+                    path.to_str().unwrap(),
+                ],
+            );
+            fs::remove_file(path.join(".git")).unwrap();
+            fs::write(path.join("local.txt"), "keep local data\n").unwrap();
+        }
+
+        let repo = gix::open(root.path()).unwrap();
+        let audits = worktree_audits(&repo).unwrap();
+        let audit = audits
+            .iter()
+            .find(|audit| paths_match(&audit.path, &selected))
+            .unwrap();
+        assert_eq!(audit.state, WorktreeState::Stale);
+        assert!(audit.protection.is_none());
+        remove_selected_worktrees(&repo, std::slice::from_ref(&selected), false).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(selected.join("local.txt")).unwrap(),
+            "keep local data\n"
+        );
+        assert_eq!(
+            fs::read_to_string(selected.join("file.txt")).unwrap(),
+            "base\n"
+        );
+        let remaining = repo.worktrees().unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert!(paths_match(&remaining[0].base().unwrap(), &unselected));
+        assert!(
+            repo.try_find_reference("refs/heads/selected")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            repo.try_find_reference("refs/heads/unselected")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn refuses_to_clean_a_locked_stale_registration_even_with_force() {
+        let root = repository();
+        let checkouts = tempfile::tempdir().unwrap();
+        let linked = checkouts.path().join("topic");
+        git(
+            root.path(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "topic",
+                linked.to_str().unwrap(),
+            ],
+        );
+        git(
+            root.path(),
+            &[
+                "worktree",
+                "lock",
+                "--reason",
+                "keep",
+                linked.to_str().unwrap(),
+            ],
+        );
+        fs::remove_file(linked.join(".git")).unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        let audits = worktree_audits(&repo).unwrap();
+        let audit = audits
+            .iter()
+            .find(|audit| paths_match(&audit.path, &linked))
+            .unwrap();
+        assert_eq!(audit.state, WorktreeState::Stale);
+        assert_eq!(
+            audit.protection,
+            Some(WorktreeProtection::Locked("keep".to_owned()))
+        );
+        let error =
+            remove_selected_worktrees(&repo, std::slice::from_ref(&linked), true).unwrap_err();
+        assert!(error.to_string().contains("locked worktree"));
+        assert_eq!(repo.worktrees().unwrap().len(), 1);
+        assert!(linked.join("file.txt").is_file());
+    }
+
+    #[test]
+    fn preserves_stale_worktree_files_even_with_force() {
+        let root = repository();
+        let checkouts = tempfile::tempdir().unwrap();
+        let linked = checkouts.path().join("topic");
+        git(
+            root.path(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "topic",
+                linked.to_str().unwrap(),
+            ],
+        );
+        fs::remove_file(linked.join(".git")).unwrap();
+        fs::write(linked.join("file.txt"), "local changes\n").unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        remove_selected_worktrees(&repo, std::slice::from_ref(&linked), true).unwrap();
+        assert!(repo.worktrees().unwrap().is_empty());
+        assert_eq!(
+            fs::read_to_string(linked.join("file.txt")).unwrap(),
+            "local changes\n"
+        );
+        assert!(
+            repo.try_find_reference("refs/heads/topic")
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn does_not_treat_a_malformed_git_file_as_a_stale_registration() {
+        let root = repository();
+        let checkouts = tempfile::tempdir().unwrap();
+        let linked = checkouts.path().join("topic");
+        git(
+            root.path(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "topic",
+                linked.to_str().unwrap(),
+            ],
+        );
+        fs::write(linked.join(".git"), "invalid git file\n").unwrap();
+
+        let repo = gix::open(root.path()).unwrap();
+        let error =
+            remove_selected_worktrees(&repo, std::slice::from_ref(&linked), true).unwrap_err();
+        assert!(error.to_string().contains("git status failed"));
+        assert_eq!(repo.worktrees().unwrap().len(), 1);
+        assert!(linked.join("file.txt").is_file());
     }
 
     #[test]

@@ -328,6 +328,7 @@ fn render_list(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
 fn state_badge(worktree: &WorktreeAudit) -> (&'static str, Style) {
     match worktree.state {
         WorktreeState::Missing => ("丢失    ", Style::default().fg(Color::Yellow)),
+        WorktreeState::Stale => ("登记失效", Style::default().fg(Color::Yellow)),
         WorktreeState::Dirty => ("有改动  ", Style::default().fg(Color::LightRed)),
         WorktreeState::Clean => ("干净    ", Style::default().fg(Color::Green)),
     }
@@ -395,6 +396,7 @@ fn audit_line(label: &str, value: &str, color: Color) -> Line<'static> {
 fn state_text(worktree: &WorktreeAudit) -> &'static str {
     match worktree.state {
         WorktreeState::Missing => "目录丢失 — 将清理注册信息",
+        WorktreeState::Stale => "登记已失效 — 仅清理登记，保留目录",
         WorktreeState::Dirty => "有本地改动 — 禁止删除",
         WorktreeState::Clean => "干净 — 可以选择",
     }
@@ -402,7 +404,7 @@ fn state_text(worktree: &WorktreeAudit) -> &'static str {
 
 fn state_color(worktree: &WorktreeAudit) -> Color {
     match worktree.state {
-        WorktreeState::Missing => Color::Yellow,
+        WorktreeState::Missing | WorktreeState::Stale => Color::Yellow,
         WorktreeState::Dirty => Color::LightRed,
         WorktreeState::Clean => Color::Green,
     }
@@ -481,7 +483,7 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(Clear, popup);
     let mut lines = vec![
         Line::styled(
-            format!("要删除这 {} 个 linked worktree 吗？", app.selected.len()),
+            format!("要清理这 {} 个 linked worktree 吗？", app.selected.len()),
             Style::default()
                 .fg(Color::LightRed)
                 .add_modifier(Modifier::BOLD),
@@ -489,8 +491,21 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
         Line::raw(""),
     ];
     let limit = popup.height.saturating_sub(11) as usize;
-    for path in app.selected.iter().take(limit) {
-        lines.push(Line::raw(format!("  • {}", path.display())));
+    for worktree in app
+        .worktrees
+        .iter()
+        .filter(|worktree| app.selected.contains(&worktree.path))
+        .take(limit)
+    {
+        let action = if worktree.state.registration_only() {
+            "仅清理登记"
+        } else {
+            "删除目录与登记"
+        };
+        lines.push(Line::raw(format!(
+            "  • [{action}] {}",
+            worktree.path.display()
+        )));
     }
     let remaining = app.selected.len().saturating_sub(limit);
     if remaining > 0 {
@@ -522,13 +537,13 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             }),
         ),
         Line::styled(
-            "目录与 worktree 注册信息会被删除；对应 local branch 会保留。",
+            "失效项仅清理登记，保留目录；正常项删除目录与登记；均保留 branch。",
             Style::default().fg(Color::Yellow),
         ),
         Line::raw(""),
         Line::from(vec![
             Span::styled(" Enter ", key_style()),
-            Span::raw("删除     "),
+            Span::raw("清理     "),
             Span::styled(" Esc ", key_style()),
             Span::raw("返回"),
         ])
@@ -539,7 +554,7 @@ fn render_confirmation(frame: &mut ratatui::Frame<'_>, area: Rect, app: &App) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::LightRed))
-                .title(" 确认删除 "),
+                .title(" 确认清理 "),
         ),
         popup,
     );
@@ -571,6 +586,7 @@ mod tests {
     fn worktree(path: &str, protection: Option<WorktreeProtection>) -> WorktreeAudit {
         WorktreeAudit {
             path: PathBuf::from(path),
+            registration: None,
             branch: "topic".to_owned(),
             short_object: "1234567".to_owned(),
             state: WorktreeState::Clean,
@@ -599,6 +615,43 @@ mod tests {
             Outcome::Continue
         );
         assert!(app.confirming);
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Outcome::Remove
+        );
+    }
+
+    #[test]
+    fn stale_registration_requires_confirmation_and_explains_preserved_directory() {
+        let mut stale = worktree("/stale", None);
+        stale.state = WorktreeState::Stale;
+        let mut app = App::new(vec![stale, worktree("/clean", None)]);
+        let backend = ratatui::backend::TestBackend::new(160, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen_text = |terminal: &Terminal<ratatui::backend::TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+                .replace(' ', "")
+        };
+        assert!(screen_text(&terminal).contains("登记已失效"));
+        assert!(screen_text(&terminal).contains("保留目录"));
+        app.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(
+            app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            Outcome::Continue
+        );
+
+        terminal.draw(|frame| render(frame, &app)).unwrap();
+        let screen = screen_text(&terminal);
+        assert!(screen.contains("[仅清理登记]/stale"));
+        assert!(screen.contains("[删除目录与登记]/clean"));
+        assert!(screen.contains("保留目录"));
         assert_eq!(
             app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
             Outcome::Remove
