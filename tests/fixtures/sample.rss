@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example feed</title><link>https://example.invalid/</link><description>Fictional articles</description>
+    <item>
+      <title>Full article</title><link>https://example.invalid/article</link>
+      <pubDate>Tue, 02 Jan 2024 12:00:00 GMT</pubDate>
+      <description>Short summary</description>
+      <content:encoded><![CDATA[<p>Full article body</p><a href="https://example.invalid/more">More</a>]]></content:encoded>
+    </item>
+    <item><title>Fallback</title><description><![CDATA[<p>Summary body</p>]]></description></item>
+    <item><guid>urn:example:empty</guid></item>
+  </channel>
+</rss>

@@ -6,9 +6,9 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use tempfile::NamedTempFile;
 
-pub mod cargo;
-mod cargo_cleanup_tui;
 pub mod completion;
+pub mod feed;
+mod feed_tui;
 pub mod git;
 mod git_branch_cleanup_tui;
 mod git_worktree_cleanup_tui;

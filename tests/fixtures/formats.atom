@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Format examples</title><id>urn:example:formats</id><updated>2024-01-02T12:00:00Z</updated>
+  <entry>
+    <title>Markdown article</title><id>urn:example:markdown</id>
+    <content type="text/markdown"><![CDATA[# Example heading
+
+A **bold phrase** and *emphasis*, with `inline_code`.
+
+| Name | Value |
+| --- | --- |
+| Example | 一段用于验证窄屏换行的中文内容 |
+
+```rust
+fn answer() -> u32 { 42 }
+```
+
+[More](https://example.invalid/more)
+]]></content>
+  </entry>
+  <entry>
+    <title>HTML article</title><id>urn:example:html</id>
+    <content type="html">&lt;p&gt;&lt;strong&gt;bold phrase&lt;/strong&gt; and &lt;em&gt;emphasis&lt;/em&gt;, &lt;del&gt;removed&lt;/del&gt;, &lt;code&gt;inline_code&lt;/code&gt;.&lt;/p&gt;&lt;p&gt;&lt;a href="https://example.invalid/more"&gt;More&lt;/a&gt;&lt;/p&gt;</content>
+  </entry>
+  <entry>
+    <title>Plain summary</title><id>urn:example:plain</id>
+    <summary type="text">**Keep this literal** and &lt;b&gt;this too&lt;/b&gt;.</summary>
+  </entry>
+</feed>

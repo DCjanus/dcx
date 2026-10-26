@@ -10,6 +10,18 @@
 
 ## 子命令
 
+### `dcx feed`
+
+在交互式 TUI 中阅读本地 RSS 或 Atom 文件：
+
+```console
+dcx feed articles.atom
+```
+
+使用 `dcx feed -` 从 stdin 读取订阅内容。界面显示条目列表、标题、日期、原文链接与正文；HTML/XHTML 保留强调、链接和代码样式，明确声明为 Markdown 的内容支持排版、表格和代码语法高亮，其余内容按纯文本显示。右栏标明格式及正文或摘要来源，按 `r` 切换富文本与原始正文。保留订阅中的条目顺序，正文缺失时显示摘要。命令只读取输入，不抓取原文或保存阅读状态。
+
+使用 `↑` / `↓` 或 `j` / `k` 选择条目，`Enter` / `Tab` 切换到正文后用相同按键滚动；`PgUp` / `PgDn` 翻动正文，`Home` / `End` 跳到正文开头或末尾。按 `/` 搜索标题与正文，`Enter` 结束输入，`Esc` 返回列表或清除筛选，`q` 退出。宽终端使用双栏，窄终端在列表与正文之间切换。
+
 ### `dcx sort`
 
 用于就地排序文本文件，省去手动管理输入文件、临时文件和结果替换的步骤。
@@ -54,27 +66,7 @@ main worktree、当前运行命令所在的 worktree、通过 `git worktree lock
 
 操作方式与 branch cleanup 一致：使用方向键移动、空格选择、`a` 全选可删除项、`x` 清空选择；按 `f` 勾选或取消强制删除。按回车查看最终删除清单，再次按下回车才执行。
 
-### `dcx cargo cleanup`
-
-用于审计并清理当前 Cargo workspace 中低复用概率的 `target` 构建缓存。命令通过 `cargo metadata` 解析实际的 target directory，识别由已卸载 rustc toolchain 产生的 hashed artifact group，以及超过 30 天未修改的 incremental cache；不会删除没有 hash 的最终二进制。
-
-默认打开中文交互式 TUI，并用醒目的颜色标出风险等级。由已卸载 rustc toolchain 产生、当前环境无法复用的 artifact group 标为“低风险”并默认勾选；仅依据修改时间判断的 incremental cache 标为“中风险”且默认不勾选。用户可以逐项调整选择，按回车查看空间汇总，再次按下回车才执行删除。删除前会锁定相关 Cargo profile；若 Cargo 或 rustc 正在使用它，清理会被拒绝。
-
-Cargo fingerprint 只保存 rustc 版本字符串的 hash，已经卸载 toolchain 后无法从现有 target 元数据还原具体版本号。因此界面展示与已安装 toolchain 的匹配状态和旧 rustc fingerprint 数量，并明确说明删除影响：不会影响当前已安装的工具链；只有未来重新安装同一旧工具链时才需要重新编译。
-
-只查看可回收空间而不删除文件：
-
-```console
-dcx cargo cleanup --dry-run
-```
-
-调整 incremental cache 的过期时间：
-
-```console
-dcx cargo cleanup --days 60
-```
-
-`--yes` 会跳过 TUI 并删除报告中的全部候选项，适合用户已经审阅过同参数 dry-run 输出后的非交互调用。
+> **Breaking change：** 已移除 `dcx cargo` 子命令；构建缓存维护请改用 mbx。
 
 ### `dcx jwt inspect`
 
