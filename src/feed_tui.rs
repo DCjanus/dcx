@@ -9,11 +9,12 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::AnyResult;
-use crate::feed::{Feed, body_text};
+use crate::feed::{Entry, Feed, render_body};
 
 pub(crate) fn run(feed: Feed) -> AnyResult {
     enable_raw_mode().context("failed to enable terminal raw mode")?;
@@ -50,8 +51,9 @@ struct App {
     query: String,
     searching: bool,
     reading: bool,
-    // 仅在条目或宽度改变时重新转换 HTML。
-    rendered: Option<(usize, u16, String)>,
+    raw: bool,
+    // 仅在条目、宽度或显示模式改变时重新渲染。
+    rendered: Option<(usize, u16, Text<'static>)>,
     list: ListState,
 }
 
@@ -66,6 +68,7 @@ impl App {
             query: String::new(),
             searching: false,
             reading: false,
+            raw: false,
             rendered: None,
             list: ListState::default(),
         }
@@ -116,6 +119,11 @@ impl App {
             }
             KeyCode::Esc => return true,
             KeyCode::Char('/') => self.searching = true,
+            KeyCode::Char('r') => {
+                self.raw = !self.raw;
+                self.rendered = None;
+                self.scroll = 0;
+            }
             KeyCode::Tab => self.reading = !self.reading,
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => self.reading = true,
             KeyCode::Left | KeyCode::Char('h') => self.reading = false,
@@ -171,12 +179,15 @@ where
                 let width = body_area.width.saturating_sub(2).max(1);
                 if app.rendered.as_ref().is_none_or(|(old, old_width, _)| *old != index || *old_width != width) {
                     let entry = &app.feed.entries[index];
-                    let body = body_text(entry, width).unwrap_or_else(|error| format!("{error:#}"));
-                    app.rendered = Some((index, width, format!("{}\n{}\n{}\n\n{}", entry.title, entry.date, entry.link, body)));
+                    app.rendered = Some((index, width, entry_text(entry, width, app.raw)));
                 }
-                app.rendered.as_ref().unwrap().2.as_str()
-            } else if app.feed.entries.is_empty() { "No entries in this feed." } else { "No matching entries." };
-            let title = if app.reading { "Content [focused]" } else { "Content" };
+                app.rendered.as_ref().unwrap().2.clone()
+            } else if app.feed.entries.is_empty() { Text::raw("No entries in this feed.") } else { Text::raw("No matching entries.") };
+            let title = app.visible.get(app.selected).map(|&index| {
+                let entry = &app.feed.entries[index];
+                format!("{} | {}{}{}", if entry.summary { "Summary" } else { "Content" }, entry.format.label(),
+                    if app.raw { " | Raw" } else { "" }, if app.reading { " [focused]" } else { "" })
+            }).unwrap_or_else(|| "Content".into());
             let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
             app.max_scroll = paragraph.line_count(body_area.width.saturating_sub(2).max(1))
                 .saturating_sub(usize::from(body_area.height.saturating_sub(2))).min(u16::MAX as usize) as u16;
@@ -184,10 +195,38 @@ where
             frame.render_widget(paragraph.block(Block::bordered().title(title)).scroll((app.scroll, 0)), body_area);
         }
         let footer = if app.searching { format!("Search: {}_\nEnter/Esc: finish", app.query) }
-        else { format!("j/k: move  Enter/Tab: focus  PgUp/PgDn: scroll  /: search  q: quit\nFilter: {}", app.query) };
+        else { format!("j/k: move  Enter/Tab: focus  PgUp/PgDn: scroll  /: search  r: raw  q: quit\nFilter: {}", app.query) };
         frame.render_widget(Paragraph::new(footer), rows[1]);
     }).context("failed to draw feed reader")?;
     Ok(())
+}
+
+fn entry_text(entry: &Entry, width: u16, raw: bool) -> Text<'static> {
+    let mut text = Text::from(vec![
+        Line::styled(
+            entry.title.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Line::styled(
+            entry.date.clone(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
+        Line::styled(
+            entry.link.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::UNDERLINED),
+        ),
+        Line::default(),
+    ]);
+    let body =
+        render_body(entry, width, raw).unwrap_or_else(|error| Text::raw(format!("{error:#}")));
+    text.lines.extend(body.lines.into_iter().map(|mut line| {
+        line.style = body.style.patch(line.style);
+        line.alignment = line.alignment.or(body.alignment);
+        line
+    }));
+    text
 }
 
 #[cfg(test)]
@@ -251,7 +290,7 @@ mod tests {
     #[test]
     fn end_aligns_the_last_content_line_with_the_bottom_of_the_viewport() {
         let mut app = app();
-        app.feed.entries[0].html = false;
+        app.feed.entries[0].format = crate::feed::BodyFormat::PlainText;
         app.feed.entries[0].body = (0..50)
             .map(|index| format!("line-{index}"))
             .collect::<Vec<_>>()
@@ -293,5 +332,39 @@ mod tests {
             app.feed.entries.clear();
             draw(&mut terminal, &mut app).unwrap();
         }
+    }
+
+    #[test]
+    fn renders_format_labels_and_switches_between_rich_and_raw_views() {
+        let feed = crate::feed::parse(include_bytes!("../tests/fixtures/formats.atom").as_slice())
+            .unwrap();
+        let mut app = App::new(feed);
+        let mut terminal = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        draw(&mut terminal, &mut app).unwrap();
+        let screen = |terminal: &Terminal<TestBackend>| {
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert!(screen(&terminal).contains("Content | Markdown"));
+        app.scroll = 5;
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.scroll, 0);
+        draw(&mut terminal, &mut app).unwrap();
+        assert!(screen(&terminal).contains("Markdown | Raw"));
+        assert!(screen(&terminal).contains("**bold phrase**"));
+        press(&mut app, KeyCode::Char('r'));
+        draw(&mut terminal, &mut app).unwrap();
+        assert!(!screen(&terminal).contains("**bold phrase**"));
+        press(&mut app, KeyCode::Down);
+        draw(&mut terminal, &mut app).unwrap();
+        assert!(screen(&terminal).contains("Content | HTML"));
+        press(&mut app, KeyCode::Down);
+        draw(&mut terminal, &mut app).unwrap();
+        assert!(screen(&terminal).contains("Summary | Plain text"));
     }
 }

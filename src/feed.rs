@@ -3,6 +3,9 @@ use std::io::{self, IsTerminal, Read};
 use std::path::Path;
 
 use anyhow::{Context, bail};
+use html2text::render::RichAnnotation;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span, Text};
 
 use crate::{AnyResult, feed_tui};
 
@@ -16,7 +19,60 @@ pub(crate) struct Entry {
     pub(crate) date: String,
     pub(crate) link: String,
     pub(crate) body: String,
-    pub(crate) html: bool,
+    pub(crate) format: BodyFormat,
+    pub(crate) summary: bool,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) enum BodyFormat {
+    #[default]
+    PlainText,
+    Html,
+    Xhtml,
+    Markdown,
+    Other(String),
+}
+
+impl BodyFormat {
+    fn from_mime(mime: &str) -> Self {
+        match mime
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "text/html" => Self::Html,
+            "application/xhtml+xml" => Self::Xhtml,
+            "text/markdown" | "text/x-markdown" => Self::Markdown,
+            "text/plain" | "" => Self::PlainText,
+            _ => Self::Other(mime.to_owned()),
+        }
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        match self {
+            Self::PlainText => "Plain text",
+            Self::Html => "HTML",
+            Self::Xhtml => "XHTML",
+            Self::Markdown => "Markdown",
+            Self::Other(mime) => mime,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ReaderStyle;
+
+impl tui_markdown::StyleSheet for ReaderStyle {
+    fn heading_marker(&self, _level: u8) -> &str {
+        ""
+    }
+
+    fn code_block_fence(&self) -> &str {
+        ""
+    }
 }
 
 /// 读取 RSS/Atom 内容并打开交互式阅读器。
@@ -42,7 +98,7 @@ pub(crate) fn parse(input: impl Read) -> AnyResult<Feed> {
         .entries
         .into_iter()
         .map(|entry| {
-            let (body, html) = entry
+            let (body, format, summary) = entry
                 .content
                 .and_then(|content| {
                     content
@@ -50,13 +106,13 @@ pub(crate) fn parse(input: impl Read) -> AnyResult<Feed> {
                         .filter(|body| !body.trim().is_empty())
                         .map(|body| {
                             let mime = content.content_type.to_string();
-                            (body, mime.contains("html"))
+                            (body, BodyFormat::from_mime(&mime), false)
                         })
                 })
                 .or_else(|| {
                     entry.summary.map(|text| {
                         let mime = text.content_type.to_string();
-                        (text.content, mime.contains("html"))
+                        (text.content, BodyFormat::from_mime(&mime), true)
                     })
                 })
                 .unwrap_or_default();
@@ -77,28 +133,100 @@ pub(crate) fn parse(input: impl Read) -> AnyResult<Feed> {
                     .map(|link| link.href)
                     .unwrap_or_default(),
                 body,
-                html,
+                format,
+                summary,
             }
         })
         .collect();
     Ok(Feed { title, entries })
 }
 
-pub(crate) fn body_text(entry: &Entry, width: u16) -> AnyResult<String> {
+pub(crate) fn render_body(entry: &Entry, width: u16, raw: bool) -> AnyResult<Text<'static>> {
     if entry.body.is_empty() {
-        return Ok("No content available.".into());
+        return Ok(Text::raw("No content available."));
     }
-    if entry.html {
-        html2text::from_read(entry.body.as_bytes(), usize::from(width.max(10)))
-            .context("failed to render feed HTML")
-    } else {
-        Ok(entry.body.clone())
+    if raw {
+        return Ok(Text::raw(entry.body.clone()));
+    }
+    match entry.format {
+        BodyFormat::Html | BodyFormat::Xhtml => {
+            let lines = html2text::config::rich()
+                .link_footnotes(true)
+                .unicode_strikeout(false)
+                .lines_from_read(entry.body.as_bytes(), usize::from(width.max(10)))
+                .context("failed to render feed HTML")?;
+            Ok(Text::from(
+                lines
+                    .iter()
+                    .map(|line| {
+                        Line::from(
+                            line.tagged_strings()
+                                .map(|part| {
+                                    let mut style = Style::default();
+                                    for annotation in &part.tag {
+                                        style = match annotation {
+                                            RichAnnotation::Strong => {
+                                                style.add_modifier(Modifier::BOLD)
+                                            }
+                                            RichAnnotation::Emphasis => {
+                                                style.add_modifier(Modifier::ITALIC)
+                                            }
+                                            RichAnnotation::Strikeout => {
+                                                style.add_modifier(Modifier::CROSSED_OUT)
+                                            }
+                                            RichAnnotation::Code | RichAnnotation::Preformat(_) => {
+                                                style.fg(Color::Yellow)
+                                            }
+                                            RichAnnotation::Link(_) => style
+                                                .fg(Color::Cyan)
+                                                .add_modifier(Modifier::UNDERLINED),
+                                            RichAnnotation::Image(_) => {
+                                                style.add_modifier(Modifier::DIM)
+                                            }
+                                            // 使用终端主题，避免订阅自带颜色降低可读性。
+                                            _ => style,
+                                        };
+                                    }
+                                    Span::styled(part.s.clone(), style)
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        }
+        BodyFormat::Markdown => {
+            let options = tui_markdown::Options::new(ReaderStyle).table_width(width.max(1));
+            let rendered = tui_markdown::from_str_with_options(&entry.body, &options);
+            // 阅读器缓存需独立于输入借用；保留库生成的行、span 和样式。
+            Ok(Text::from(
+                rendered
+                    .lines
+                    .into_iter()
+                    .map(|line| Line {
+                        spans: line
+                            .spans
+                            .into_iter()
+                            .map(|span| Span::styled(span.content.into_owned(), span.style))
+                            .collect(),
+                        style: line.style,
+                        alignment: line.alignment,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .style(rendered.style))
+        }
+        _ => Ok(Text::raw(entry.body.clone())),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn body_text(entry: &Entry, width: u16) -> AnyResult<String> {
+        Ok(render_body(entry, width, false)?.to_string())
+    }
 
     #[test]
     fn reads_atom_html_and_plain_summary_without_changing_order() {
@@ -160,5 +288,86 @@ mod tests {
         assert!(body.contains("Formatted"));
         assert!(body.contains("body"));
         assert!(!body.contains("<div"));
+    }
+
+    fn formats() -> Feed {
+        parse(include_bytes!("../tests/fixtures/formats.atom").as_slice()).unwrap()
+    }
+
+    fn styled_fragment(text: &Text<'_>, fragment: &str, modifier: Modifier) -> bool {
+        text.lines.iter().any(|line| {
+            line.spans.iter().any(|span| {
+                span.content.contains(fragment)
+                    && text
+                        .style
+                        .patch(line.style)
+                        .patch(span.style)
+                        .add_modifier
+                        .contains(modifier)
+            })
+        })
+    }
+
+    #[test]
+    fn detects_declared_formats_and_summary_source_without_guessing() {
+        let feed = formats();
+        assert_eq!(feed.entries[0].format, BodyFormat::Markdown);
+        assert_eq!(feed.entries[1].format, BodyFormat::Html);
+        assert!(!feed.entries[1].summary);
+        assert_eq!(feed.entries[2].format, BodyFormat::PlainText);
+        assert!(feed.entries[2].summary);
+        let plain = render_body(&feed.entries[2], 80, false).unwrap();
+        assert!(plain.to_string().contains("**Keep this literal**"));
+        assert!(!styled_fragment(&plain, "literal", Modifier::BOLD));
+        assert_eq!(
+            BodyFormat::from_mime("text/markdown; charset=utf-8"),
+            BodyFormat::Markdown
+        );
+        assert_eq!(
+            BodyFormat::from_mime("application/xhtml+xml"),
+            BodyFormat::Xhtml
+        );
+        assert_eq!(
+            BodyFormat::from_mime("text/x-example"),
+            BodyFormat::Other("text/x-example".into())
+        );
+    }
+
+    #[test]
+    fn html_rich_output_preserves_styles_and_link_targets() {
+        let feed = formats();
+        let rich = render_body(&feed.entries[1], 80, false).unwrap();
+        assert!(styled_fragment(&rich, "bold phrase", Modifier::BOLD));
+        assert!(styled_fragment(&rich, "emphasis", Modifier::ITALIC));
+        assert!(styled_fragment(&rich, "removed", Modifier::CROSSED_OUT));
+        assert!(styled_fragment(&rich, "More", Modifier::UNDERLINED));
+        assert!(rich.to_string().contains("https://example.invalid/more"));
+        assert!(!rich.to_string().contains("<strong>"));
+        let raw = render_body(&feed.entries[1], 80, true).unwrap();
+        assert_eq!(raw.to_string(), feed.entries[1].body);
+        assert!(!styled_fragment(&raw, "bold phrase", Modifier::BOLD));
+    }
+
+    #[test]
+    fn markdown_renders_tables_emphasis_and_highlighted_code() {
+        let feed = formats();
+        let rich = render_body(&feed.entries[0], 40, false).unwrap();
+        assert!(styled_fragment(&rich, "bold phrase", Modifier::BOLD));
+        assert!(styled_fragment(&rich, "emphasis", Modifier::ITALIC));
+        assert!(rich.to_string().contains("Example heading"));
+        assert!(rich.to_string().contains('─'));
+        assert!(
+            rich.lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| { span.content.contains("answer") && span.style.fg.is_some() })
+        );
+        assert!(!rich.to_string().contains("```rust"));
+        let raw = render_body(&feed.entries[0], 40, true).unwrap();
+        assert_eq!(raw.to_string(), feed.entries[0].body.trim_end_matches('\n'));
+        for width in [1, 20, 80] {
+            let resized = render_body(&feed.entries[0], width, false).unwrap();
+            assert!(resized.to_string().contains("Example heading"));
+        }
     }
 }
