@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn markdown_renders_tables_emphasis_and_highlighted_code() {
-        let feed = formats();
+        let mut feed = formats();
         let rich = render_body(&feed.entries[0], 40, false).unwrap();
         assert!(styled_fragment(&rich, "bold phrase", Modifier::BOLD));
         assert!(styled_fragment(&rich, "emphasis", Modifier::ITALIC));
@@ -363,8 +363,16 @@ mod tests {
                 .any(|span| { span.content.contains("answer") && span.style.fg.is_some() })
         );
         assert!(!rich.to_string().contains("```rust"));
-        let raw = render_body(&feed.entries[0], 40, true).unwrap();
-        assert_eq!(raw.to_string(), feed.entries[0].body.trim_end_matches('\n'));
+        let source_lines = feed.entries[0]
+            .body
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        for ending in ["\n", "\r\n"] {
+            feed.entries[0].body = source_lines.join(ending) + ending;
+            let raw = render_body(&feed.entries[0], 40, true).unwrap();
+            assert_eq!(raw.to_string(), source_lines.join("\n"));
+        }
         for width in [1, 20, 80] {
             let resized = render_body(&feed.entries[0], width, false).unwrap();
             assert!(resized.to_string().contains("Example heading"));
