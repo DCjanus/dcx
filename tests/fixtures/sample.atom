@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>示例订阅</title><id>urn:example:feed</id><updated>2024-01-02T12:00:00Z</updated>
+  <entry>
+    <title>第一篇文章</title><id>urn:example:first</id><updated>2024-01-02T12:00:00Z</updated>
+    <link rel="self" href="https://example.invalid/first.atom"/>
+    <link rel="alternate" href="https://example.invalid/first"/>
+    <summary>备用摘要</summary>
+    <content type="html">&lt;h1&gt;阅读示例&lt;/h1&gt;&lt;p&gt;支持 &lt;strong&gt;HTML&lt;/strong&gt; &amp;amp; 中文。&lt;/p&gt;&lt;ul&gt;&lt;li&gt;列表内容&lt;/li&gt;&lt;/ul&gt;&lt;pre&gt;let answer = 42;&lt;/pre&gt;</content>
+  </entry>
+  <entry>
+    <title>Summary only</title><id>urn:example:second</id><updated>2024-01-01T12:00:00Z</updated>
+    <summary type="text">Plain text: a &lt; b &amp; c.</summary>
+  </entry>
+</feed>
