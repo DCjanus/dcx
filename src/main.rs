@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use dcx::{AnyResult, completion, feed, git, jwt, skill, sort_file, uniq_any_order};
+use dcx::{AnyResult, completion, feed, git, jwt, skill, sort_file, ssh, uniq_any_order};
 use size::Size;
 
 /// 文本处理、Git 仓库维护与 Coding Agent 辅助工具集。
@@ -26,6 +26,12 @@ struct Command {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// 从 SSH 私钥提取公钥。
+    #[command(about = "Extract public keys from OpenSSH private keys")]
+    Ssh {
+        #[command(subcommand)]
+        subcommand: SshCommands,
+    },
     /// 在交互式 TUI 中阅读 RSS 或 Atom 文件。
     #[command(about = "Read an RSS or Atom feed in an interactive TUI")]
     Feed {
@@ -121,6 +127,19 @@ enum JwtCommands {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum SshCommands {
+    /// 输出 OpenSSH 私钥中包含的公钥，无需解密。
+    #[command(
+        about = "Print the public key embedded in an OpenSSH private key (no passphrase needed)"
+    )]
+    PublicKey {
+        /// 私钥文件；省略或使用 - 时从 stdin 读取
+        #[arg(help = "OpenSSH private key file, or - to read from standard input")]
+        path: Option<PathBuf>,
+    },
+}
+
 #[derive(Debug, Args)]
 struct BranchCleanupArguments {
     /// 删除前更新并 prune 远端 refs
@@ -201,6 +220,17 @@ fn main() -> AnyResult {
     }
 
     match command {
+        Commands::Ssh {
+            subcommand: SshCommands::PublicKey { path },
+        } => match path.as_deref() {
+            Some(path) if path.as_os_str() != "-" => {
+                let file = std::fs::File::open(path).map_err(|error| {
+                    anyhow::anyhow!("failed to open {}: {error}", path.display())
+                })?;
+                ssh::public_key(file, io::BufWriter::new(io::stdout()))
+            }
+            _ => ssh::public_key(io::stdin().lock(), io::BufWriter::new(io::stdout())),
+        },
         Commands::Feed { path } => feed::browse(&path),
         Commands::Sort {
             path,
