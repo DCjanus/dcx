@@ -19,7 +19,7 @@ dcx ssh public-key ~/.ssh/id_ed25519
 dcx ssh public-key ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub
 ```
 
-省略路径或使用 `-` 时从 stdin 读取。支持 Ed25519、RSA 和 ECDSA 等 OpenSSH 私钥，使用纯 Rust 实现，无需安装或调用 `ssh-keygen`。加密私钥也无需口令：直接读取文件中包含的公钥，不解密或验证加密部分。输出仅包含算法与 Base64 数据，省略注释。暂不支持旧式 PEM、PKCS#8 或 PuTTY 私钥格式。
+省略路径或使用 `-` 时从 stdin 读取。支持 Ed25519、RSA 和 ECDSA 等 OpenSSH 私钥，使用纯 Rust 实现，无需安装或调用 `ssh-keygen`。直接读取文件中包含的公钥，仅检查容器结构与公钥格式，不解析或验证私钥数据，因此加密私钥也无需口令。输出仅包含算法与 Base64 数据，省略注释。暂不支持旧式 PEM、PKCS#8 或 PuTTY 私钥格式。
 
 ### `dcx feed`
 

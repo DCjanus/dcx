@@ -149,3 +149,20 @@ fn missing_file_fails_without_stdout() {
             .contains("failed to open")
     );
 }
+
+#[test]
+fn accepts_p521_with_short_private_scalar() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("key");
+    // 仅供测试的生成密钥：OpenSSH 将私有标量编码为不足 66 字节的 mpint。
+    fs::write(&path, include_bytes!("fixtures/ssh-p521-short")).unwrap();
+    let expected = include_str!("fixtures/ssh-p521-short.pub");
+    let fields: Vec<_> = expected.split_whitespace().collect();
+    let expected = format!("{} {}\n", fields[0], fields[1]);
+    let output = common::dcx(&directory.path().join("skills"))
+        .args(["ssh", "public-key"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert_public_key(&output, expected.as_bytes());
+}

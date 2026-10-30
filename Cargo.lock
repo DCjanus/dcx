@@ -589,6 +589,7 @@ dependencies = [
  "ratatui",
  "serde_json",
  "size",
+ "ssh-encoding",
  "ssh-key",
  "tempfile",
  "tui-markdown",
