@@ -1,0 +1,25 @@
+[tasks.fmt]
+description = "格式化 Rust 代码"
+run = "cargo +stable fmt --all"
+
+[tasks.fix]
+description = "自动修复 Clippy 可修复的问题"
+run = "cargo +stable clippy --fix --allow-dirty --all-targets"
+
+[tasks.check]
+description = "检查依赖、格式、Clippy 并运行全部测试"
+run = [
+    "cargo +stable machete",
+    "cargo +stable fmt --all -- --check",
+    "cargo +stable clippy --locked --all-targets -- -D warnings",
+    "cargo +stable test --locked --all-targets",
+]
+
+[tasks.prepare]
+description = "格式化代码后运行完整检查"
+run = ["mise run fmt", "mise run check"]
+
+[tasks.install]
+description = "检查并从当前 checkout 安装 dcx"
+depends = ["prepare"]
+run = "cargo +stable install --path . --force --locked"

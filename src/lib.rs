@@ -13,6 +13,7 @@ pub mod git;
 mod git_branch_cleanup_tui;
 mod git_worktree_cleanup_tui;
 pub mod jwt;
+pub mod qr;
 pub mod skill;
 pub mod ssh;
 

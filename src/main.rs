@@ -1,8 +1,8 @@
-use std::io;
+use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use dcx::{AnyResult, completion, feed, git, jwt, skill, sort_file, ssh, uniq_any_order};
+use dcx::{AnyResult, completion, feed, git, jwt, qr, skill, sort_file, ssh, uniq_any_order};
 use size::Size;
 
 /// 文本处理、Git 仓库维护与 Coding Agent 辅助工具集。
@@ -26,6 +26,25 @@ struct Command {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// 从文本或 stdin 生成二维码。
+    #[command(about = "Generate a QR code from text or standard input")]
+    Qr {
+        #[arg(
+            required_unless_present = "stdin",
+            conflicts_with = "stdin",
+            help = "Text to encode"
+        )]
+        text: Option<String>,
+        #[arg(long, help = "Read text from standard input")]
+        stdin: bool,
+        #[arg(
+            short,
+            long,
+            value_name = "FILE",
+            help = "Save as PNG or SVG (selected by file extension)"
+        )]
+        output: Option<PathBuf>,
+    },
     /// 从 SSH 私钥提取公钥。
     #[command(about = "Extract public keys from OpenSSH private keys")]
     Ssh {
@@ -220,6 +239,26 @@ fn main() -> AnyResult {
     }
 
     match command {
+        Commands::Qr {
+            text,
+            stdin: _,
+            output,
+        } => {
+            let text = match text {
+                Some(text) => text,
+                None => {
+                    let mut text = String::new();
+                    io::stdin().read_to_string(&mut text)?;
+                    text
+                }
+            };
+            qr::generate(
+                &text,
+                output.as_deref(),
+                io::stdout().is_terminal(),
+                io::BufWriter::new(io::stdout()),
+            )
+        }
         Commands::Ssh {
             subcommand: SshCommands::PublicKey { path },
         } => match path.as_deref() {
