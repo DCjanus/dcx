@@ -10,6 +10,19 @@
 
 ## 子命令
 
+### `dcx qr`
+
+从文本生成二维码，默认在终端显示，也可按输出文件扩展名保存为 PNG 或 SVG：
+
+```console
+dcx qr 'https://example.com'
+dcx qr '你好' -o qr.png
+dcx qr 'https://example.com' -o qr.svg
+printf %s 'https://example.com' | dcx qr --stdin
+```
+
+使用 `--stdin` 显式从 stdin 读取，与文本参数互斥。输入中的换行与空格会原样编码；不需要末尾换行时使用 `printf` 而非 `echo`。文件输出成功时不向 stdout 输出内容。
+
 ### `dcx ssh public-key`
 
 从 OpenSSH 私钥提取公钥，输出到 stdout：
@@ -124,13 +137,13 @@ cargo +stable install --force --git https://github.com/DCjanus/dcx --locked dcx
 
 ## 开发
 
-使用 [just](https://github.com/casey/just) 运行完整的本地检查：
+使用 [mise](https://mise.jdx.dev/) 运行完整的本地检查：
 
 ```console
-just check
+mise run check
 ```
 
-从当前 checkout 安装时运行 `just install`，或直接运行 `cargo +stable install --path . --force --locked`。若本机 rustup 默认工具链为 stable，也可以省略 `+stable`。
+从当前 checkout 安装时运行 `mise run install`，会先格式化并完成检查，再安装。也可直接运行 `cargo +stable install --path . --force --locked`。若本机 rustup 默认工具链为 stable，也可以省略 `+stable`。
 
 在 macOS 上从源码安装前，需运行 `rustup component add llvm-tools --toolchain stable`，供发布构建裁剪二进制使用。
 
