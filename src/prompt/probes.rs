@@ -621,11 +621,7 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
     let mut text = String::new();
     output.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
     if let Some(stderr) = stderr {
-        let mut error_text = String::new();
-        stderr
-            .take(MAX_SAMPLE)
-            .read_to_string(&mut error_text)
-            .ok()?;
+        let error_text = read_version_sample(stderr)?;
         if text.is_empty() {
             text = error_text;
         }
@@ -668,4 +664,22 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
         version
     };
     Some(format!("{label}:{}", clean(version)))
+}
+
+fn read_version_sample(output: File) -> Option<String> {
+    let mut bytes = Vec::new();
+    output.take(MAX_SAMPLE + 1).read_to_end(&mut bytes).ok()?;
+    let truncated = bytes.len() > MAX_SAMPLE as usize;
+    bytes.truncate(MAX_SAMPLE as usize);
+    match String::from_utf8(bytes) {
+        Ok(text) => Some(text),
+        Err(error) if truncated && error.utf8_error().error_len().is_none() => {
+            // 截断可能落在一个 UTF-8 字符的中间。
+            let valid_length = error.utf8_error().valid_up_to();
+            let mut bytes = error.into_bytes();
+            bytes.truncate(valid_length);
+            String::from_utf8(bytes).ok()
+        }
+        Err(_) => None,
+    }
 }
