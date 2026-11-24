@@ -1,10 +1,10 @@
 use std::env;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::Command;
 
-use super::{MAX_SAMPLE, capture, capture_output, clean, fingerprint};
+use super::{MAX_SAMPLE, ProbeStderr, capture, capture_output, clean, fingerprint};
 
 #[derive(Clone, Copy)]
 pub(super) struct Probe {
@@ -462,13 +462,7 @@ fn read_toml(path: &Path) -> Option<toml::Table> {
     if !path.is_file() {
         return None;
     }
-    let mut source = String::new();
-    File::open(path)
-        .ok()?
-        .take(64 * 1024)
-        .read_to_string(&mut source)
-        .ok()?;
-    source.parse().ok()
+    fs::read_to_string(path).ok()?.parse().ok()
 }
 
 fn go(cwd: &Path, kinds: SourceKinds) -> Option<String> {
@@ -505,9 +499,10 @@ fn java(cwd: &Path, kinds: SourceKinds) -> Option<String> {
     let binary = env::var_os("JAVA_HOME")
         .map(|home| Path::new(&home).join("bin/java"))
         .unwrap_or_else(|| "java".into());
-    if let Some((status, output)) =
-        capture_output(Command::new(&binary).arg("-Xinternalversion"), true)
-        && status.success()
+    if let Some((status, output)) = capture_output(
+        Command::new(&binary).arg("-Xinternalversion"),
+        ProbeStderr::Merge,
+    ) && status.success()
     {
         let mut text = String::new();
         output.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
@@ -612,9 +607,24 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
     {
         return Some(String::new());
     }
-    let (status, output) = capture_output(Command::new(bin).args(args), label == "py")?;
+    let stderr = if label == "py" {
+        Some(tempfile::tempfile().ok()?)
+    } else {
+        None
+    };
+    let (status, output) = capture_output(
+        Command::new(bin).args(args),
+        stderr
+            .as_ref()
+            .map_or(ProbeStderr::Discard, ProbeStderr::Separate),
+    )?;
     let mut text = String::new();
     output.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
+    if text.trim().is_empty()
+        && let Some(stderr) = stderr
+    {
+        stderr.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
+    }
     let reported = status
         .success()
         .then(|| {

@@ -549,7 +549,12 @@ fn cargo_workspace_and_members_show_inherited_package_version() {
 
 #[test]
 fn parses_valid_toml_and_poetry_package_versions() {
+    let long_manifest = format!(
+        "[package]\nversion = \"5.6.7\"\ndescription = \"{}\"\n",
+        "a".repeat(70_000),
+    );
     for (path, manifest, version) in [
+        ("Cargo.toml", long_manifest.as_str(), "5.6.7"),
         (
             "Cargo.toml",
             "[package] # metadata\nversion = \"5.6.7\"\n",
@@ -590,6 +595,17 @@ fn python_version_accepts_stderr_from_the_selected_interpreter() {
     fixture.tool("python", "printf 'Python 2.7.18\n' >&2");
     fixture.tool("python3", "printf 'Python 3.15.2\n'");
     let expected = "via \x1b[1;33m🐍 v2.7.18";
+    let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
+    assert!(prompt.contains(expected), "{prompt:?}");
+    if let Some(oracle) = fixture.oracle(&["module", "python"], &[]) {
+        assert!(oracle.contains(expected), "{oracle:?}");
+    }
+
+    fixture.tool(
+        "python",
+        "printf 'Python 2.7.18\n' >&2; printf 'Python 3.4.5\n'",
+    );
+    let expected = "via \x1b[1;33m🐍 v3.4.5";
     let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
     assert!(prompt.contains(expected), "{prompt:?}");
     if let Some(oracle) = fixture.oracle(&["module", "python"], &[]) {

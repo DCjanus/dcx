@@ -388,12 +388,18 @@ fn clean(text: &str) -> String {
 }
 
 fn capture(command: &mut process::Command) -> Option<(process::ExitStatus, File)> {
-    capture_output(command, false)
+    capture_output(command, ProbeStderr::Discard)
+}
+
+enum ProbeStderr<'a> {
+    Discard,
+    Merge,
+    Separate(&'a File),
 }
 
 fn capture_output(
     command: &mut process::Command,
-    include_stderr: bool,
+    stderr: ProbeStderr<'_>,
 ) -> Option<(process::ExitStatus, File)> {
     // 临时文件避免管道写满阻塞，也避免超时后等待后代进程关闭管道。
     let mut output = tempfile::tempfile().ok()?;
@@ -402,14 +408,14 @@ fn capture_output(
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let stderr = if include_stderr {
-        Stdio::from(output.try_clone().ok()?)
-    } else {
-        Stdio::null()
+    let stderr_stdio = match stderr {
+        ProbeStderr::Discard => Stdio::null(),
+        ProbeStderr::Merge => Stdio::from(output.try_clone().ok()?),
+        ProbeStderr::Separate(file) => Stdio::from(file.try_clone().ok()?),
     };
     let mut child = command
         .stdin(Stdio::null())
-        .stderr(stderr)
+        .stderr(stderr_stdio)
         .stdout(output.try_clone().ok()?)
         .spawn()
         .ok()?;
@@ -418,6 +424,9 @@ fn capture_output(
         match child.try_wait() {
             Ok(Some(status)) => {
                 output.seek(SeekFrom::Start(0)).ok()?;
+                if let ProbeStderr::Separate(mut file) = stderr {
+                    file.seek(SeekFrom::Start(0)).ok()?;
+                }
                 return Some((status, output));
             }
             Ok(None) if started.elapsed() < PROBE_TIMEOUT => {
