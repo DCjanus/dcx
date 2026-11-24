@@ -668,18 +668,15 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
 
 fn read_version_sample(output: File) -> Option<String> {
     let mut bytes = Vec::new();
-    output.take(MAX_SAMPLE + 1).read_to_end(&mut bytes).ok()?;
-    let truncated = bytes.len() > MAX_SAMPLE as usize;
-    bytes.truncate(MAX_SAMPLE as usize);
-    match String::from_utf8(bytes) {
-        Ok(text) => Some(text),
-        Err(error) if truncated && error.utf8_error().error_len().is_none() => {
-            // 截断可能落在一个 UTF-8 字符的中间。
-            let valid_length = error.utf8_error().valid_up_to();
-            let mut bytes = error.into_bytes();
-            bytes.truncate(valid_length);
-            String::from_utf8(bytes).ok()
+    // 若采样边界落在一个 UTF-8 字符中间，最多再读三个字节来验证它。
+    output.take(MAX_SAMPLE + 3).read_to_end(&mut bytes).ok()?;
+    let mut end = bytes.len().min(MAX_SAMPLE as usize);
+    while let Err(error) = std::str::from_utf8(&bytes[..end]) {
+        if error.error_len().is_some() || end == bytes.len() {
+            return None;
         }
-        Err(_) => None,
+        end += 1;
     }
+    bytes.truncate(end);
+    String::from_utf8(bytes).ok()
 }

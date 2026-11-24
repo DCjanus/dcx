@@ -607,6 +607,10 @@ fn python_version_accepts_stderr_from_the_selected_interpreter() {
             "via 🐍 v3.4.5",
         ),
         (
+            "printf 'Python 3.4.5\n'; printf '%8191s\\303x\n' '' >&2",
+            "via 🐍 v3.15.2",
+        ),
+        (
             "printf 'Python 2.7.18\n' >&2; printf 'Python 3.4.5\n'",
             "via 🐍 v3.4.5",
         ),
