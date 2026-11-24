@@ -601,6 +601,8 @@ fn python_version_accepts_stderr_from_the_selected_interpreter() {
         assert!(oracle.contains(expected), "{oracle:?}");
     }
 
+    let fixture = Fixture::new();
+    fixture.write("script.py", "");
     fixture.tool(
         "python",
         "printf 'Python 2.7.18\n' >&2; printf 'Python 3.4.5\n'",
