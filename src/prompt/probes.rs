@@ -620,10 +620,15 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
     )?;
     let mut text = String::new();
     output.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
-    if text.trim().is_empty()
-        && let Some(stderr) = stderr
-    {
-        stderr.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
+    if let Some(stderr) = stderr {
+        let mut error_text = String::new();
+        stderr
+            .take(MAX_SAMPLE)
+            .read_to_string(&mut error_text)
+            .ok()?;
+        if text.is_empty() {
+            text = error_text;
+        }
     }
     let reported = status
         .success()
@@ -651,7 +656,11 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
         return None;
     }
     let Some(version) = reported else {
-        return Some(String::new());
+        return Some(if label == "py" {
+            with_detected_icon(label, String::new())
+        } else {
+            String::new()
+        });
     };
     let version = if label == "ruby" {
         version.split_once('p').map_or(version, |(base, _)| base)

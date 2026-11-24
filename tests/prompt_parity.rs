@@ -601,16 +601,28 @@ fn python_version_accepts_stderr_from_the_selected_interpreter() {
         assert!(oracle.contains(expected), "{oracle:?}");
     }
 
-    let fixture = Fixture::new();
-    fixture.write("script.py", "");
-    fixture.tool(
-        "python",
-        "printf 'Python 2.7.18\n' >&2; printf 'Python 3.4.5\n'",
-    );
-    let expected = "via \x1b[1;33m🐍 v3.4.5";
-    let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
-    assert!(prompt.contains(expected), "{prompt:?}");
-    if let Some(oracle) = fixture.oracle(&["module", "python"], &[]) {
-        assert!(oracle.contains(expected), "{oracle:?}");
+    for (script, expected) in [
+        (
+            "printf 'Python 2.7.18\n' >&2; printf 'Python 3.4.5\n'",
+            "via 🐍 v3.4.5",
+        ),
+        ("printf '   \n'; printf 'Python 2.7.18\n' >&2", "via 🐍"),
+        (
+            "printf 'Python 3.4.5\n'; printf '\\377' >&2",
+            "via 🐍 v3.15.2",
+        ),
+    ] {
+        let fixture = Fixture::new();
+        fixture.write("script.py", "");
+        fixture.tool("python", script);
+        fixture.tool("python3", "printf 'Python 3.15.2\n'");
+        let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
+        assert_eq!(
+            visible_lines(&prompt).lines().nth(1),
+            Some(&format!("~/project {expected}")[..])
+        );
+        if let Some(oracle) = fixture.oracle(&["module", "python"], &[]) {
+            assert_eq!(visible_lines(&oracle).trim(), expected);
+        }
     }
 }
