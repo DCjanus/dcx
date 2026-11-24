@@ -143,3 +143,52 @@ fn retains_the_last_successful_sample_when_probes_time_out() {
     wait_until(|| fs::metadata(&sample).unwrap().modified().unwrap() > previous);
     assert!(fixture.render(project, &[]).contains("py:3.13.1"));
 }
+
+#[test]
+fn shortens_repository_paths_after_discovery() {
+    let fixture = Fixture::new();
+    let project = &fixture.project;
+    let result = Command::new("git")
+        .args(["init", "-qb", "main"])
+        .current_dir(project)
+        .status()
+        .unwrap();
+    assert!(result.success());
+
+    let nested = project.join("docs");
+    fs::create_dir(&nested).unwrap();
+    wait_until(|| fixture.render(project, &[]).starts_with("project on main "));
+    wait_until(|| {
+        fixture
+            .render(&nested, &[])
+            .starts_with("project/docs on main ")
+    });
+}
+
+#[test]
+fn refreshes_after_a_command_when_an_older_git_probe_is_in_flight() {
+    let fixture = Fixture::new();
+    let project = &fixture.project;
+    fs::write(project.join("head"), "before").unwrap();
+    fixture.tool(
+        "git",
+        r#"head=$(cat head)
+if [ "$head" = before ]; then
+    touch before-read
+    while [ ! -f release ]; do sleep 0.01; done
+else
+    touch after-read
+fi
+printf '# branch.head %s\n' "$head"
+"#,
+    );
+
+    fixture.render(project, &[]);
+    wait_until(|| project.join("before-read").exists());
+    fs::write(project.join("head"), "after").unwrap();
+    fixture.render(project, &["--after-command"]);
+    fs::write(project.join("release"), "").unwrap();
+
+    wait_until(|| project.join("after-read").exists());
+    wait_until(|| fixture.render(project, &[]).contains("on after"));
+}

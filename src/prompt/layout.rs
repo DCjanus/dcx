@@ -29,8 +29,8 @@ impl Layout {
         self.item(identity, "1;33", false);
     }
 
-    pub(super) fn directory(&mut self, cwd: &Path) {
-        let directory = display_directory(cwd);
+    pub(super) fn directory(&mut self, cwd: &Path, git_depth: Option<usize>) {
+        let directory = display_directory(cwd, git_depth);
         if display_width(&directory) > self.width {
             let prefix = if directory.starts_with("~/") {
                 "~/.../"
@@ -50,6 +50,7 @@ impl Layout {
 
     pub(super) fn module(&mut self, name: &str, value: &str) {
         if name == "git" {
+            let value = value.split_once('\n').map_or(value, |(_, summary)| summary);
             let git = value.strip_prefix("git:").unwrap_or(value);
             let (branch, flags) = git.split_once(' ').unwrap_or((git, ""));
             let prefix = if self.nerd { "" } else { "on" };
@@ -75,14 +76,14 @@ impl Layout {
         } else {
             let (label, value) = value.split_once(':').unwrap_or(("", value));
             let (plain, icon, color) = match label {
-                "pkg" => ("pkg", "󰏗", "33"),
-                "go" => ("go", "", "36"),
-                "rust" => ("rust", "", "31"),
+                "pkg" => ("pkg", "📦", "33"),
+                "go" => ("go", "🐹", "36"),
+                "rust" => ("rust", "🦀", "31"),
                 "node" => ("node", "", "32"),
-                "py" => ("py", "", "33"),
+                "py" => ("py", "🐍", "33"),
                 "env" => ("env", "󰈙", "33"),
-                "java" => ("java", "", "31"),
-                "ruby" => ("ruby", "", "31"),
+                "java" => ("java", "☕", "31"),
+                "ruby" => ("ruby", "💎", "31"),
                 _ => return,
             };
             let item = if self.nerd {
@@ -90,6 +91,11 @@ impl Layout {
                 format!("{icon} {version_prefix}{value}")
             } else {
                 format!("{plain}:{value}")
+            };
+            let color = if self.nerd && label == "pkg" {
+                "1;38;5;208"
+            } else {
+                color
             };
             self.item(&item, color, false);
         }
@@ -115,26 +121,28 @@ impl Layout {
 
     pub(super) fn finish(mut self, status: u32, mode: Option<&str>) -> String {
         self.output.push('\n');
-        let character = match mode {
+        let (character, color) = match mode {
+            Some("visual") if self.nerd => ("❮", "1;33"),
+            Some("replace" | "replace_one") if self.nerd => ("❮", "1;35"),
             Some("default") => {
                 if self.nerd {
-                    "❮"
+                    ("❮", "1;32")
                 } else {
-                    "<"
+                    ("<", "1;32")
                 }
             }
-            Some("visual") => "v",
-            Some("replace" | "replace_one") => "r",
+            Some("visual") => ("v", "1;33"),
+            Some("replace" | "replace_one") => ("r", "1;35"),
             _ => {
                 if self.nerd {
-                    "❯"
+                    ("❯", "1;32")
                 } else {
-                    ">"
+                    (">", "1;32")
                 }
             }
         };
         let (text, style) = if status == 0 {
-            (character.to_owned(), "1;32")
+            (character.to_owned(), color)
         } else {
             (format!("[{status}] {character}"), "1;31")
         };
@@ -176,11 +184,22 @@ impl Layout {
     }
 }
 
-fn display_directory(cwd: &Path) -> String {
+fn display_directory(cwd: &Path, git_depth: Option<usize>) -> String {
     let logical = env::var_os("PWD")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute());
     let directory = logical.as_deref().unwrap_or(cwd);
+    if let Some(depth) = git_depth {
+        let tail = directory
+            .components()
+            .rev()
+            .take(depth.saturating_add(1).min(3))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<PathBuf>();
+        return tail.to_string_lossy().into_owned();
+    }
     let home = env::var_os("HOME").and_then(|home| directory.strip_prefix(home).ok());
     let path = home.unwrap_or(directory);
     let components = path
@@ -190,7 +209,7 @@ fn display_directory(cwd: &Path) -> String {
             _ => None,
         })
         .collect::<Vec<_>>();
-    if components.len() <= 3 {
+    if components.len() + usize::from(home.is_some()) <= 3 {
         if let Some(relative) = home {
             return if relative.as_os_str().is_empty() {
                 "~".into()
@@ -201,11 +220,11 @@ fn display_directory(cwd: &Path) -> String {
         return directory.to_string_lossy().into_owned();
     }
 
-    let tail = components[components.len() - 3..]
+    components[components.len().saturating_sub(3)..]
         .iter()
-        .collect::<PathBuf>();
-    let prefix = if home.is_some() { "~/..." } else { "/..." };
-    Path::new(prefix).join(tail).to_string_lossy().into_owned()
+        .collect::<PathBuf>()
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn display_width(text: &str) -> usize {

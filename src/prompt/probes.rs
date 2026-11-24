@@ -115,8 +115,9 @@ fn git(cwd: &Path) -> Option<String> {
         return (status.code() == Some(128)).then(String::new);
     }
     let mut summary = git_summary(BufReader::new(output))?;
-    if let Some(operation) = gix::discover_with_environment_overrides(cwd)
-        .ok()
+    let repository = gix::discover_with_environment_overrides(cwd).ok();
+    if let Some(operation) = repository
+        .as_ref()
         .and_then(|repository| repository.state())
     {
         use gix::state::InProgress::*;
@@ -129,6 +130,15 @@ fn git(cwd: &Path) -> Option<String> {
             Bisect => "bisect",
             ApplyMailbox => "am",
         });
+    }
+    if let Some(depth) = repository
+        .as_ref()
+        .and_then(|repository| repository.workdir())
+        .filter(|root| !env::var_os("HOME").is_some_and(|home| *root == Path::new(&home)))
+        .and_then(|root| cwd.strip_prefix(root).ok())
+        .map(|relative| relative.components().count())
+    {
+        summary = format!("{depth}\n{summary}");
     }
     Some(summary)
 }

@@ -107,7 +107,14 @@ fn render(arguments: RenderArguments) -> AnyResult {
     if let Some(identity) = identity {
         layout.identity(&identity);
     }
-    layout.directory(&cwd);
+    let git_depth = samples
+        .0
+        .iter()
+        .zip(probes::ALL)
+        .find(|(_, probe)| probe.name == "git")
+        .and_then(|(sample, _)| sample.text.split_once('\n'))
+        .and_then(|(depth, _)| depth.parse::<usize>().ok());
+    layout.directory(&cwd, git_depth);
     for (sample, probe) in samples.0.iter().zip(probes::ALL) {
         if !sample.text.is_empty() {
             layout.module(probe.name, &sample.text);
@@ -166,8 +173,12 @@ fn refresh(shell_pid: u32, shown: u64, after_command: Option<u64>) -> AnyResult 
                 let cache = &cache;
                 let cwd = &cwd;
                 scope.spawn(move || {
+                    let started = timestamp();
                     let value = probes::collect(probe, cwd).unwrap_or(sample.text);
-                    let _ = write_sample(&cache.join(probe.name), &value);
+                    let _ = write_sample(
+                        &cache.join(probe.name),
+                        &format!("started {started}\n{value}"),
+                    );
                 });
             }
         }
@@ -239,14 +250,27 @@ impl Samples {
             let Ok(file) = File::open(path) else {
                 return Sample::default();
             };
-            let updated = file
+            let modified = file
                 .metadata()
                 .and_then(|metadata| metadata.modified())
                 .map(nanoseconds)
                 .unwrap_or_default();
             let mut text = String::new();
             let _ = file.take(MAX_SAMPLE).read_to_string(&mut text);
-            Sample { updated, text }
+            if let Some((started, value)) = text
+                .strip_prefix("started ")
+                .and_then(|sample| sample.split_once('\n'))
+                && let Ok(updated) = started.parse()
+            {
+                return Sample {
+                    updated,
+                    text: value.to_owned(),
+                };
+            }
+            Sample {
+                updated: modified,
+                text,
+            }
         }))
     }
 

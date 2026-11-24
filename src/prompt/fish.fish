@@ -1,5 +1,6 @@
 # 后台进程只刷新磁盘数据。退出状态和作业数始终从交互式 Fish 获取。
 status is-interactive; or return
+set -gx VIRTUAL_ENV_DISABLE_PROMPT 1
 
 function __dcx_prompt_postexec --on-event fish_postexec
     set -g __dcx_prompt_status $status
@@ -9,6 +10,10 @@ end
 
 function __dcx_prompt_repaint --on-signal USR1
     commandline -f repaint 2>/dev/null
+end
+
+# 模式标记由提示符本身绘制。
+function fish_mode_prompt
 end
 
 function fish_prompt --inherit-variable __dcx_prompt_executable
