@@ -40,6 +40,7 @@ size = "0.6.0"
 ssh-encoding = { version = "0.3.0", features = ["alloc", "pem"] }
 ssh-key = { version = "0.7.0-rc.11", default-features = false, features = ["std", "ecdsa"] }
 tempfile = "3.27.0"
+toml = { version = "1.2.2", default-features = false, features = ["parse", "serde"] }
 tui-markdown = "0.3.12"
 zeroize = { version = "1.9.1", features = ["alloc"] }
 
