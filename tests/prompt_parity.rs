@@ -426,3 +426,122 @@ fn narrow_terminal_keeps_connectors_with_their_module() {
         "\nproject on  main [?]\nis 📦 v1.2.3\nvia 🦀 v1.100.0\n❯ "
     );
 }
+
+#[test]
+fn source_files_without_manifests_activate_language_modules() {
+    let fixture = Fixture::new();
+    let args = ["--status=0", "--duration=0", "--jobs=0", "--width=240"];
+    for (file, tool, reply, expected) in [
+        (
+            "main.go",
+            "go",
+            "go version go1.27.4 linux/amd64",
+            "🐹 v1.27.4",
+        ),
+        ("index.mts", "node", "v24.1.2", " v24.1.2"),
+        ("script.py", "python", "Python 3.15.2", "🐍 v3.15.2"),
+        ("script.rb", "ruby", "ruby 3.4.8", "💎 v3.4.8"),
+        ("main.rs", "rustc", "rustc 1.100.0", "🦀 v1.100.0"),
+    ] {
+        fixture.tool(tool, &format!("printf '%s\\n' '{reply}'"));
+        assert!(!fixture.render(&args, &[]).contains(expected));
+        fixture.write(file, "");
+        assert!(fixture.render(&args, &[]).contains(expected));
+        if let Some(oracle) = fixture.oracle(&["prompt", "--terminal-width=240"], &[]) {
+            assert!(oracle.contains(expected), "{oracle:?}");
+        }
+    }
+    fixture.write("deno.json", "{}");
+    assert!(!fixture.render(&args, &[]).contains(""));
+    if let Some(oracle) = fixture.oracle(&["prompt"], &[]) {
+        assert!(!oracle.contains(""), "{oracle:?}");
+    }
+}
+
+#[test]
+fn conda_path_uses_basename_and_does_not_enable_python() {
+    let fixture = Fixture::new();
+    fixture.tool("python", "printf 'Python 3.15.2\n'");
+    let args = ["--status=0", "--duration=0", "--jobs=0"];
+    let conda = [
+        ("CONDA_DEFAULT_ENV", "/fixture/conda/science"),
+        ("CONDA_PREFIX", "/fixture/conda/science"),
+        ("CONDA_SHLVL", "1"),
+    ];
+    let result = fixture.render(&args, &conda);
+    assert!(result.contains("via \x1b[1;32m🅒 science"), "{result:?}");
+    assert!(!result.contains("🐍"), "{result:?}");
+    if let Some(oracle) = fixture.oracle(&["prompt"], &conda) {
+        assert!(
+            oracle.contains("via \x1b[1;32m🅒 science") && !oracle.contains("🐍"),
+            "{oracle:?}"
+        );
+    }
+    let mut pixi = conda.to_vec();
+    pixi.push(("PIXI_ENVIRONMENT_NAME", "default"));
+    assert!(!fixture.render(&args, &pixi).contains("🅒"));
+}
+
+#[test]
+fn rebase_reports_current_and_total_commits() {
+    let fixture = Fixture::new();
+    fixture.init_git();
+    fixture.git(&["switch", "-qc", "feature"]);
+    fixture.write("tracked", "feature\n");
+    fixture.git(&["commit", "-qam", "feature"]);
+    fixture.write("extra", "second commit\n");
+    fixture.git(&["add", "extra"]);
+    fixture.git(&["commit", "-qm", "extra"]);
+    fixture.git(&["switch", "-q", "main"]);
+    fixture.write("tracked", "main\n");
+    fixture.git(&["commit", "-qam", "main"]);
+    fixture.git(&["switch", "-q", "feature"]);
+    let rebase = fixture
+        .command("git")
+        .args(["rebase", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(rebase.status.code(), Some(1));
+    let result = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
+    let operation = "(\x1b[1;33mREBASING 1/2\x1b[0m)";
+    assert!(result.contains(operation), "{result:?}");
+    if let Some(oracle) = fixture.oracle(&["module", "git_state"], &[]) {
+        assert_eq!(oracle.trim_end(), operation);
+    }
+}
+
+#[test]
+fn cargo_workspace_and_members_show_inherited_package_version() {
+    let mut fixture = Fixture::new();
+    fixture.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"member\"]\n[workspace.package]\nversion = \"0.8.1\"\n",
+    );
+    let workspace = fixture.cwd.clone();
+    let config = fs::read_to_string(workspace.join("starship.toml")).unwrap();
+    let member = workspace.join("member");
+    fs::create_dir(&member).unwrap();
+    for (cwd, manifest) in [
+        (&workspace, ""),
+        (
+            &member,
+            "[package]\nname = \"member\"\nversion.workspace = true\n",
+        ),
+        (
+            &member,
+            "[package]\nname = \"member\"\nversion = { workspace = true }\n",
+        ),
+    ] {
+        fixture.cwd = cwd.clone();
+        if !manifest.is_empty() {
+            fixture.write("Cargo.toml", manifest);
+            fixture.write("starship.toml", &config);
+        }
+        let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
+        let expected = "is \x1b[1;38;5;208m📦 v0.8.1";
+        assert!(prompt.contains(expected), "{prompt:?}");
+        if let Some(oracle) = fixture.oracle(&["module", "package"], &[]) {
+            assert!(oracle.contains(expected), "{oracle:?}");
+        }
+    }
+}

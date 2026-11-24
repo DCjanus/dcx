@@ -9,17 +9,17 @@ use super::{MAX_SAMPLE, capture, capture_output, clean, fingerprint};
 #[derive(Clone, Copy)]
 pub(super) struct Probe {
     pub name: &'static str,
-    collect: fn(&Path) -> Option<String>,
+    collect: fn(&Path, SourceKinds) -> Option<String>,
 }
 
 pub(super) const ALL: [Probe; 10] = [
     Probe {
         name: "git",
-        collect: git,
+        collect: |cwd, _| git(cwd),
     },
     Probe {
         name: "package",
-        collect: package,
+        collect: |cwd, _| package(cwd),
     },
     Probe {
         name: "go",
@@ -39,7 +39,7 @@ pub(super) const ALL: [Probe; 10] = [
     },
     Probe {
         name: "environment",
-        collect: environment,
+        collect: |cwd, _| environment(cwd),
     },
     Probe {
         name: "ruby",
@@ -51,15 +51,101 @@ pub(super) const ALL: [Probe; 10] = [
     },
     Probe {
         name: "conda",
-        collect: conda,
+        collect: |cwd, _| conda(cwd),
     },
 ];
 
-pub(super) fn collect(probe: &Probe, cwd: &Path) -> Option<String> {
-    (probe.collect)(cwd)
+pub(super) fn collect(probe: &Probe, cwd: &Path, kinds: SourceKinds) -> Option<String> {
+    (probe.collect)(cwd, kinds)
 }
 
-pub(super) fn selection_fingerprint(cwd: &Path) -> u64 {
+const GO_FILES: &[&str] = &[
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "glide.yaml",
+    "Gopkg.yml",
+    "Gopkg.lock",
+    ".go-version",
+];
+const JAVA_FILES: &[&str] = &[
+    "pom.xml",
+    "build.gradle.kts",
+    "build.sbt",
+    ".java-version",
+    "deps.edn",
+    "project.clj",
+    "build.boot",
+    ".sdkmanrc",
+];
+const NODE_FILES: &[&str] = &["package.json", ".node-version", ".nvmrc"];
+const NODE_EXCLUSIONS: &[&str] = &[
+    "bunfig.toml",
+    "bun.lock",
+    "bun.lockb",
+    "deno.json",
+    "deno.jsonc",
+    "deno.lock",
+];
+const PYTHON_FILES: &[&str] = &[
+    "requirements.txt",
+    ".python-version",
+    "pyproject.toml",
+    "Pipfile",
+    "tox.ini",
+    "setup.py",
+    "__init__.py",
+];
+const RUST_FILES: &[&str] = &["Cargo.toml"];
+const RUBY_FILES: &[&str] = &["Gemfile", ".ruby-version"];
+fn nerd() -> bool {
+    env::var_os("DCX_PROMPT_STYLE").is_some_and(|style| style == "nerd")
+}
+
+#[derive(Clone, Copy, Default, Hash)]
+pub(super) struct SourceKinds {
+    go: bool,
+    java: bool,
+    node: bool,
+    python: bool,
+    rust: bool,
+    ruby: bool,
+}
+
+pub(super) fn source_kinds(cwd: &Path) -> SourceKinds {
+    let mut kinds = SourceKinds::default();
+    if let Ok(entries) = std::fs::read_dir(cwd) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            match Path::new(&name)
+                .extension()
+                .and_then(|extension| extension.to_str())
+            {
+                Some("go") => kinds.go = true,
+                Some("java" | "class" | "jar" | "gradle" | "clj" | "cljc") => kinds.java = true,
+                Some("js" | "mjs" | "cjs" | "ts" | "mts" | "cts") => kinds.node = true,
+                Some("py" | "ipynb") => kinds.python = true,
+                Some("rs") => kinds.rust = true,
+                Some("rb") => kinds.ruby = true,
+                _ => {}
+            }
+        }
+    }
+    kinds
+}
+
+fn detected(cwd: &Path, files: &[&str], has_source: bool) -> bool {
+    if nerd() {
+        files.iter().any(|file| cwd.join(file).is_file()) || has_source
+    } else {
+        project_file(cwd, files).is_some() || has_source
+    }
+}
+
+pub(super) fn selection_fingerprint(cwd: &Path, kinds: SourceKinds) -> u64 {
     // 同一个 shim 文件可以在项目配置修改后指向另一个版本。
     let mut selectors = Vec::new();
     for ancestor in cwd.ancestors() {
@@ -73,34 +159,37 @@ pub(super) fn selection_fingerprint(cwd: &Path) -> u64 {
             "mise.local.toml",
             ".mise.local.toml",
             ".tool-versions",
-            ".python-version",
-            ".node-version",
-            ".nvmrc",
-            ".go-version",
-            "go.mod",
-            "go.work",
             "rust-toolchain",
             "rust-toolchain.toml",
-            ".java-version",
-            ".ruby-version",
-            "package.json",
-            "Cargo.toml",
-            "pyproject.toml",
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "Gemfile",
-            "requirements.txt",
-            "Pipfile",
             "uv.lock",
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            [
+                GO_FILES,
+                JAVA_FILES,
+                NODE_FILES,
+                NODE_EXCLUSIONS,
+                PYTHON_FILES,
+                RUST_FILES,
+                RUBY_FILES,
+            ]
+            .into_iter()
+            .flatten()
+            .copied(),
+        ) {
             let path = ancestor.join(name);
             if let Ok(metadata) = path.metadata() {
                 selectors.push((path, metadata.len(), metadata.modified().ok()));
             }
         }
     }
-    fingerprint(&selectors)
+    fingerprint(&(
+        selectors,
+        kinds,
+        cwd.join("node_modules").is_dir(),
+        cwd.join("Godeps").is_dir(),
+    ))
 }
 
 fn project_file<'a>(cwd: &'a Path, names: &[&str]) -> Option<&'a Path> {
@@ -138,20 +227,25 @@ fn git(cwd: &Path) -> Option<String> {
         (upstream.shorten() != head.shorten()).then(|| upstream.shorten().to_string())
     });
     let mut summary = git_summary(BufReader::new(output), upstream.as_deref())?;
-    if let Some(operation) = repository
-        .as_ref()
-        .and_then(|repository| repository.state())
+    if let Some(repository) = &repository
+        && let Some(operation) = repository.state()
     {
         use gix::state::InProgress::*;
         summary.push(' ');
-        summary.push_str(match operation {
+        let label = match operation {
             Rebase | RebaseInteractive | ApplyMailboxRebase => "rebase",
             Merge => "merge",
             CherryPick | CherryPickSequence => "cherry-pick",
             Revert | RevertSequence => "revert",
             Bisect => "bisect",
             ApplyMailbox => "am",
-        });
+        };
+        summary.push_str(label);
+        if matches!(label, "rebase" | "am")
+            && let Some((current, total)) = rebase_progress(repository.git_dir())
+        {
+            summary.push_str(&format!(":{current}/{total}"));
+        }
     }
     if let Some(depth) = repository
         .as_ref()
@@ -162,6 +256,20 @@ fn git(cwd: &Path) -> Option<String> {
         summary = format!("{depth}\n{summary}");
     }
     Some(summary)
+}
+
+fn rebase_progress(git_dir: &Path) -> Option<(u32, u32)> {
+    let read = |name| {
+        let mut value = String::new();
+        File::open(git_dir.join(name))
+            .ok()?
+            .take(32)
+            .read_to_string(&mut value)
+            .ok()?;
+        value.trim().parse().ok()
+    };
+    let merge_progress = || Some((read("rebase-merge/msgnum")?, read("rebase-merge/end")?));
+    merge_progress().or_else(|| Some((read("rebase-apply/next")?, read("rebase-apply/last")?)))
 }
 
 fn repository_depth(cwd: &Path, root: &Path) -> Option<usize> {
@@ -264,11 +372,16 @@ fn git_summary(output: impl BufRead, upstream_name: Option<&str>) -> Option<Stri
 }
 
 fn package(cwd: &Path) -> Option<String> {
-    let Some(directory) = project_file(cwd, &["package.json", "Cargo.toml", "pyproject.toml"])
-    else {
-        return Some(String::new());
+    let directory = if nerd() {
+        cwd
+    } else {
+        let Some(directory) = project_file(cwd, &["package.json", "Cargo.toml", "pyproject.toml"])
+        else {
+            return Some(String::new());
+        };
+        directory
     };
-    let version = package_toml(&directory.join("Cargo.toml"), "[package]")
+    let version = cargo_package_version(directory)
         .or_else(|| package_json(&directory.join("package.json")))
         .or_else(|| package_toml(&directory.join("pyproject.toml"), "[project]"));
     Some(
@@ -296,6 +409,43 @@ fn package_json(path: &Path) -> Option<String> {
 }
 
 fn package_toml(path: &Path, section: &str) -> Option<String> {
+    let value = toml_field(path, section, "version")?;
+    let quote = value
+        .chars()
+        .next()
+        .filter(|quote| matches!(quote, '"' | '\''))?;
+    Some(value[1..].split_once(quote)?.0.to_owned())
+}
+
+fn cargo_package_version(directory: &Path) -> Option<String> {
+    let manifest = directory.join("Cargo.toml");
+    if let Some(version) = package_toml(&manifest, "[package]")
+        .or_else(|| package_toml(&manifest, "[workspace.package]"))
+    {
+        return Some(version);
+    }
+    let inherited = toml_field(&manifest, "[package]", "version.workspace").as_deref()
+        == Some("true")
+        || toml_field(&manifest, "[package.version]", "workspace").as_deref() == Some("true")
+        || toml_field(&manifest, "[package]", "version").is_some_and(|value| {
+            value
+                .chars()
+                .filter(|character| !character.is_whitespace())
+                .collect::<String>()
+                == "{workspace=true}"
+        });
+    if !inherited {
+        return None;
+    }
+    let workspace = directory
+        .ancestors()
+        .skip(1)
+        .map(|path| path.join("Cargo.toml"))
+        .find(|manifest| manifest.is_file())?;
+    package_toml(&workspace, "[workspace.package]")
+}
+
+fn toml_field(path: &Path, section: &str, field: &str) -> Option<String> {
     if !path.is_file() {
         return None;
     }
@@ -308,60 +458,42 @@ fn package_toml(path: &Path, section: &str) -> Option<String> {
             in_section = line == section;
         } else if in_section
             && let Some((key, value)) = line.split_once('=')
-            && key.trim() == "version"
+            && key.trim() == field
         {
-            let value = value.trim();
-            let quote = value
-                .chars()
-                .next()
-                .filter(|quote| matches!(quote, '"' | '\''))?;
-            return Some(value[1..].split_once(quote)?.0.to_owned());
+            return Some(value.trim().to_owned());
         }
     }
     None
 }
 
-fn go(cwd: &Path) -> Option<String> {
+fn go(cwd: &Path, kinds: SourceKinds) -> Option<String> {
     version_in_project(
-        cwd,
-        &["go.mod", "go.work", ".go-version"],
+        detected(cwd, GO_FILES, kinds.go) || cwd.join("Godeps").is_dir(),
         "go",
         "go",
         &["version"],
     )
 }
 
-fn rust(cwd: &Path) -> Option<String> {
-    version_in_project(
-        cwd,
-        &["Cargo.toml", "rust-toolchain", "rust-toolchain.toml"],
-        "rust",
-        "rustc",
-        &["--version"],
-    )
+fn rust(cwd: &Path, kinds: SourceKinds) -> Option<String> {
+    let matches = detected(cwd, RUST_FILES, kinds.rust)
+        || (!nerd() && project_file(cwd, &["rust-toolchain", "rust-toolchain.toml"]).is_some());
+    version_in_project(matches, "rust", "rustc", &["--version"])
 }
 
-fn node(cwd: &Path) -> Option<String> {
+fn node(cwd: &Path, kinds: SourceKinds) -> Option<String> {
+    let excluded = nerd() && NODE_EXCLUSIONS.iter().any(|name| cwd.join(name).is_file());
     version_in_project(
-        cwd,
-        &["package.json", ".node-version", ".nvmrc"],
+        !excluded && (detected(cwd, NODE_FILES, kinds.node) || cwd.join("node_modules").is_dir()),
         "node",
         "node",
         &["--version"],
     )
 }
 
-fn java(cwd: &Path) -> Option<String> {
-    if project_file(
-        cwd,
-        &[
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            ".java-version",
-        ],
-    )
-    .is_none()
+fn java(cwd: &Path, kinds: SourceKinds) -> Option<String> {
+    if !detected(cwd, JAVA_FILES, kinds.java)
+        && (nerd() || project_file(cwd, &["build.gradle"]).is_none())
     {
         return Some(String::new());
     }
@@ -395,16 +527,15 @@ fn java(cwd: &Path) -> Option<String> {
         }
     }
     version("java", binary.to_str()?, &["--version"])
+        .map(|sample| with_detected_icon("java", sample))
 }
 
-fn ruby(cwd: &Path) -> Option<String> {
-    version_in_project(
-        cwd,
-        &["Gemfile", ".ruby-version"],
-        "ruby",
-        "ruby",
-        &["--version"],
-    )
+fn ruby(cwd: &Path, kinds: SourceKinds) -> Option<String> {
+    let matches = detected(cwd, RUBY_FILES, kinds.ruby)
+        || ["RUBY_VERSION", "RBENV_VERSION"]
+            .iter()
+            .any(|name| env::var_os(name).is_some());
+    version_in_project(matches, "ruby", "ruby", &["--version"])
 }
 
 fn environment(_: &Path) -> Option<String> {
@@ -420,51 +551,50 @@ fn environment(_: &Path) -> Option<String> {
 }
 
 fn conda(_: &Path) -> Option<String> {
-    let name = env::var("CONDA_DEFAULT_ENV")
-        .ok()
-        .filter(|name| !name.is_empty() && name != "base");
+    let name = env::var_os("CONDA_DEFAULT_ENV")
+        .filter(|_| env::var_os("PIXI_ENVIRONMENT_NAME").is_none())
+        .and_then(|name| {
+            Path::new(&name)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .filter(|name| name != "base");
     Some(name.map_or_else(String::new, |name| format!("conda:{}", clean(&name))))
 }
 
-fn python(cwd: &Path) -> Option<String> {
-    if project_file(
-        cwd,
-        &[
-            ".python-version",
-            "pyproject.toml",
-            "requirements.txt",
-            "Pipfile",
-            "uv.lock",
-        ],
-    )
-    .is_none()
-        && env::var_os("VIRTUAL_ENV").is_none()
-        && env::var_os("CONDA_PREFIX").is_none()
-    {
+fn python(cwd: &Path, kinds: SourceKinds) -> Option<String> {
+    let matches = detected(cwd, PYTHON_FILES, kinds.python)
+        || env::var_os("VIRTUAL_ENV").is_some()
+        || (!nerd()
+            && (project_file(cwd, &["uv.lock"]).is_some()
+                || env::var_os("CONDA_PREFIX").is_some()));
+    if !matches {
         return Some(String::new());
     }
     let mut failed = false;
-    for bin in ["python", "python3"] {
+    for bin in ["python", "python3", "python2"] {
         match version("py", bin, &["--version"]) {
             Some(result) if result.is_empty() => continue,
             Some(result) => return Some(result),
             None => failed = true,
         }
     }
-    (!failed).then(String::new)
+    (!failed).then(|| with_detected_icon("py", String::new()))
 }
 
-fn version_in_project(
-    cwd: &Path,
-    files: &[&str],
-    label: &str,
-    bin: &str,
-    args: &[&str],
-) -> Option<String> {
-    if project_file(cwd, files).is_none() {
+fn version_in_project(matched: bool, label: &str, bin: &str, args: &[&str]) -> Option<String> {
+    if !matched {
         return Some(String::new());
     }
-    version(label, bin, args)
+    version(label, bin, args).map(|sample| with_detected_icon(label, sample))
+}
+
+fn with_detected_icon(label: &str, sample: String) -> String {
+    if sample.is_empty() && nerd() {
+        format!("{label}:")
+    } else {
+        sample
+    }
 }
 
 fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
@@ -497,7 +627,12 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
                 })
         })
         .flatten();
-    let version = reported?;
+    if !status.success() {
+        return None;
+    }
+    let Some(version) = reported else {
+        return Some(String::new());
+    };
     let version = if label == "ruby" {
         version.split_once('p').map_or(version, |(base, _)| base)
     } else {

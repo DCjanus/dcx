@@ -201,7 +201,8 @@ fn refresh(shell_pid: u32, shown: u64, after_command: Option<u64>) -> AnyResult 
     lock.lock()?;
     let samples = Samples::read(&cache);
     let now = timestamp();
-    let selection = format!("{:016x}", probes::selection_fingerprint(&cwd));
+    let sources = probes::source_kinds(&cwd);
+    let selection = format!("{:016x}", probes::selection_fingerprint(&cwd, sources));
     let selection_path = cache.join("selection");
     let selection_changed = fs::read_to_string(&selection_path).ok().as_deref() != Some(&selection);
     thread::scope(|scope| {
@@ -213,7 +214,7 @@ fn refresh(shell_pid: u32, shown: u64, after_command: Option<u64>) -> AnyResult 
                 let cwd = &cwd;
                 scope.spawn(move || {
                     let started = timestamp();
-                    let value = probes::collect(probe, cwd).unwrap_or(sample.text);
+                    let value = probes::collect(probe, cwd, sources).unwrap_or(sample.text);
                     let _ = write_sample(
                         &cache.join(probe.name),
                         &format!("started {started}\n{value}"),
@@ -275,6 +276,7 @@ fn cache_dir(cwd: &Path) -> Option<PathBuf> {
                 key.as_ref(),
                 "PATH"
                     | "PWD"
+                    | "DCX_PROMPT_STYLE"
                     | "VIRTUAL_ENV"
                     | "CONDA_PREFIX"
                     | "CONDA_DEFAULT_ENV"
@@ -282,6 +284,8 @@ fn cache_dir(cwd: &Path) -> Option<PathBuf> {
                     | "PYTHONHOME"
                     | "JAVA_HOME"
                     | "RBENV_VERSION"
+                    | "RUBY_VERSION"
+                    | "PIXI_ENVIRONMENT_NAME"
             ) || [
                 "MISE_", "RUSTUP_", "PYENV_", "ASDF_", "NVM_", "VOLTA_", "GIT_", "GO",
             ]

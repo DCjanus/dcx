@@ -32,7 +32,7 @@ impl Layout {
     pub(super) fn python(&mut self, sample: &str, environment: &str) {
         let version = sample.strip_prefix("py:").unwrap_or_default();
         let environment = environment.strip_prefix("env:").unwrap_or_default();
-        if version.is_empty() && environment.is_empty() {
+        if sample.is_empty() && environment.is_empty() {
             return;
         }
         let mut label = String::from("🐍");
@@ -158,7 +158,7 @@ impl Layout {
                 {
                     continue;
                 }
-                let operation = match flag {
+                let operation = match git_status_name(flag) {
                     "rebase" => Some("REBASING"),
                     "merge" => Some("MERGING"),
                     "cherry-pick" => Some("CHERRY-PICKING"),
@@ -170,7 +170,11 @@ impl Layout {
                 if self.nerd
                     && let Some(operation) = operation
                 {
-                    self.item_with_affixes("(", operation, ")", "1;33", false);
+                    let text = flag.split_once(':').map_or_else(
+                        || operation.to_owned(),
+                        |(_, step)| format!("{operation} {step}"),
+                    );
+                    self.item_with_affixes("(", &text, ")", "1;33", false);
                 } else {
                     self.item(
                         flag,
@@ -196,7 +200,9 @@ impl Layout {
                 "ruby" => ("ruby", "💎", "1;31"),
                 _ => return,
             };
-            let item = if self.nerd {
+            let item = if self.nerd && value.is_empty() {
+                icon.to_owned()
+            } else if self.nerd {
                 let version_prefix = if matches!(label, "env" | "conda") {
                     ""
                 } else {
