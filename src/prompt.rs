@@ -213,6 +213,7 @@ fn cache_dir(cwd: &Path) -> Option<PathBuf> {
             matches!(
                 key.as_ref(),
                 "PATH"
+                    | "PWD"
                     | "VIRTUAL_ENV"
                     | "CONDA_PREFIX"
                     | "CONDA_DEFAULT_ENV"

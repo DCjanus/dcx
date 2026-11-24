@@ -32,9 +32,14 @@ impl Fixture {
     }
 
     fn render(&self, cwd: &Path, args: &[&str]) -> String {
+        self.render_logical(cwd, None, args)
+    }
+
+    fn render_logical(&self, cwd: &Path, logical: Option<&Path>, args: &[&str]) -> String {
         let output = Command::new(env!("CARGO_BIN_EXE_dcx"))
             .current_dir(cwd)
             .env_clear()
+            .envs(logical.map(|path| ("PWD", path)))
             .env("HOME", self.root.path().canonicalize().unwrap())
             .env("PATH", format!("{}:/usr/bin:/bin", self.bin.display()))
             .env("NO_COLOR", "1")
@@ -163,6 +168,16 @@ fn shortens_repository_paths_after_discovery() {
             .render(&nested, &[])
             .starts_with("project/docs on main ")
     });
+
+    let links = fixture.root.path().canonicalize().unwrap().join("links");
+    fs::create_dir(&links).unwrap();
+    let alias = links.join("scratch");
+    std::os::unix::fs::symlink(&nested, &alias).unwrap();
+    wait_until(|| {
+        fixture
+            .render_logical(&alias, Some(&alias), &[])
+            .starts_with("~/links/scratch on main ")
+    });
 }
 
 #[test]
@@ -191,4 +206,17 @@ printf '# branch.head %s\n' "$head"
 
     wait_until(|| project.join("after-read").exists());
     wait_until(|| fixture.render(project, &[]).contains("on after"));
+}
+
+#[test]
+fn refreshes_tools_when_a_project_manifest_is_added() {
+    let fixture = Fixture::new();
+    let project = &fixture.project;
+    fixture.tool("git", "printf '# branch.head main\n'");
+    fixture.tool("java", "printf 'openjdk 26.0.1\n'");
+
+    wait_until(|| fixture.render(project, &[]).contains("on main"));
+    fs::write(project.join("pom.xml"), "<project/>").unwrap();
+    fixture.render(project, &["--after-command"]);
+    wait_until(|| fixture.render(project, &[]).contains("java:26.0.1"));
 }

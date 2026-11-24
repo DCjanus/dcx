@@ -59,6 +59,10 @@ pub(super) fn selection_fingerprint(cwd: &Path) -> u64 {
     // 同一个 shim 文件可以在项目配置修改后指向另一个版本。
     let mut selectors = Vec::new();
     for ancestor in cwd.ancestors() {
+        let git = ancestor.join(".git");
+        if git.exists() {
+            selectors.push((git, 0, None));
+        }
         for name in [
             "mise.toml",
             ".mise.toml",
@@ -78,6 +82,13 @@ pub(super) fn selection_fingerprint(cwd: &Path) -> u64 {
             "package.json",
             "Cargo.toml",
             "pyproject.toml",
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "Gemfile",
+            "requirements.txt",
+            "Pipfile",
+            "uv.lock",
         ] {
             let path = ancestor.join(name);
             if let Ok(metadata) = path.metadata() {
@@ -135,12 +146,31 @@ fn git(cwd: &Path) -> Option<String> {
         .as_ref()
         .and_then(|repository| repository.workdir())
         .filter(|root| !env::var_os("HOME").is_some_and(|home| *root == Path::new(&home)))
-        .and_then(|root| cwd.strip_prefix(root).ok())
-        .map(|relative| relative.components().count())
+        .and_then(|root| repository_depth(cwd, root))
     {
         summary = format!("{depth}\n{summary}");
     }
     Some(summary)
+}
+
+fn repository_depth(cwd: &Path, root: &Path) -> Option<usize> {
+    let logical = env::var_os("PWD");
+    let logical = logical
+        .as_deref()
+        .map(Path::new)
+        .filter(|path| path.is_absolute())
+        .unwrap_or(cwd);
+    if logical == cwd {
+        return cwd
+            .strip_prefix(root)
+            .ok()
+            .map(|relative| relative.components().count());
+    }
+    // 软链接可能直接指向仓库子目录，逻辑路径的祖先不一定经过仓库根。
+    let root = root.canonicalize().ok()?;
+    logical
+        .ancestors()
+        .position(|ancestor| ancestor.canonicalize().is_ok_and(|path| path == root))
 }
 
 fn git_summary(output: impl BufRead) -> Option<String> {
