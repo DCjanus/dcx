@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 use std::process::Command;
 
-use super::{MAX_SAMPLE, capture, clean, fingerprint};
+use super::{MAX_SAMPLE, capture, capture_output, clean, fingerprint};
 
 #[derive(Clone, Copy)]
 pub(super) struct Probe {
@@ -12,7 +12,7 @@ pub(super) struct Probe {
     collect: fn(&Path) -> Option<String>,
 }
 
-pub(super) const ALL: [Probe; 9] = [
+pub(super) const ALL: [Probe; 10] = [
     Probe {
         name: "git",
         collect: git,
@@ -26,8 +26,8 @@ pub(super) const ALL: [Probe; 9] = [
         collect: go,
     },
     Probe {
-        name: "rust",
-        collect: rust,
+        name: "java",
+        collect: java,
     },
     Probe {
         name: "node",
@@ -42,12 +42,16 @@ pub(super) const ALL: [Probe; 9] = [
         collect: environment,
     },
     Probe {
-        name: "java",
-        collect: java,
-    },
-    Probe {
         name: "ruby",
         collect: ruby,
+    },
+    Probe {
+        name: "rust",
+        collect: rust,
+    },
+    Probe {
+        name: "conda",
+        collect: conda,
     },
 ];
 
@@ -125,8 +129,15 @@ fn git(cwd: &Path) -> Option<String> {
         // Git 返回 128 时没有可用的仓库状态，例如切出仓库或移除 .git。
         return (status.code() == Some(128)).then(String::new);
     }
-    let mut summary = git_summary(BufReader::new(output))?;
     let repository = gix::discover_with_environment_overrides(cwd).ok();
+    let upstream = repository.as_ref().and_then(|repository| {
+        let head = repository.head_name().ok()??;
+        let upstream = repository
+            .branch_remote_ref_name(head.as_ref(), gix::remote::Direction::Fetch)?
+            .ok()?;
+        (upstream.shorten() != head.shorten()).then(|| upstream.shorten().to_string())
+    });
+    let mut summary = git_summary(BufReader::new(output), upstream.as_deref())?;
     if let Some(operation) = repository
         .as_ref()
         .and_then(|repository| repository.state())
@@ -173,7 +184,7 @@ fn repository_depth(cwd: &Path, root: &Path) -> Option<usize> {
         .position(|ancestor| ancestor.canonicalize().is_ok_and(|path| path == root))
 }
 
-fn git_summary(output: impl BufRead) -> Option<String> {
+fn git_summary(output: impl BufRead, upstream_name: Option<&str>) -> Option<String> {
     let mut branch = None;
     let mut oid = None;
     let mut upstream = None;
@@ -182,6 +193,8 @@ fn git_summary(output: impl BufRead) -> Option<String> {
     let mut modified = false;
     let mut untracked = false;
     let mut conflicted = false;
+    let mut deleted = false;
+    let mut renamed = false;
     for line in output.lines() {
         let line = line.ok()?;
         if let Some(value) = line.strip_prefix("# branch.head ") {
@@ -195,8 +208,10 @@ fn git_summary(output: impl BufRead) -> Option<String> {
         } else {
             match line.as_bytes() {
                 [b'1' | b'2', b' ', index, worktree, ..] => {
-                    staged |= *index != b'.';
-                    modified |= *worktree != b'.';
+                    staged |= matches!(index, b'A' | b'M' | b'T');
+                    modified |= matches!(worktree, b'A' | b'M');
+                    deleted |= *index == b'D' || *worktree == b'D';
+                    renamed |= *index == b'R' || *worktree == b'R';
                 }
                 [b'?', b' ', ..] => untracked = true,
                 [b'u', b' ', ..] => conflicted = true,
@@ -208,13 +223,19 @@ fn git_summary(output: impl BufRead) -> Option<String> {
         return Some(String::new());
     };
     let head = if branch == "(detached)" {
-        oid.as_deref()
-            .and_then(|oid| oid.get(..7))
-            .unwrap_or("detached")
+        "HEAD"
     } else {
         &branch
     };
     let mut parts = vec![format!("git:{head}")];
+    if let Some(upstream_name) = upstream_name.filter(|_| head != "HEAD") {
+        parts.push(format!("upstream:{upstream_name}"));
+    }
+    if branch == "(detached)"
+        && let Some(hash) = oid.as_deref().and_then(|oid| oid.get(..7))
+    {
+        parts.push(format!("commit:{hash}"));
+    }
     if let Some(upstream) = upstream.filter(|value| *value != "+0 -0") {
         parts.push(upstream);
     }
@@ -230,6 +251,12 @@ fn git_summary(output: impl BufRead) -> Option<String> {
     if conflicted {
         parts.push("conflict".into());
     }
+    if deleted {
+        parts.push("deleted".into());
+    }
+    if renamed {
+        parts.push("renamed".into());
+    }
     if let Some(count) = stashes {
         parts.push(format!("stash:{count}"));
     }
@@ -241,8 +268,8 @@ fn package(cwd: &Path) -> Option<String> {
     else {
         return Some(String::new());
     };
-    let version = package_json(&directory.join("package.json"))
-        .or_else(|| package_toml(&directory.join("Cargo.toml"), "[package]"))
+    let version = package_toml(&directory.join("Cargo.toml"), "[package]")
+        .or_else(|| package_json(&directory.join("package.json")))
         .or_else(|| package_toml(&directory.join("pyproject.toml"), "[project]"));
     Some(
         version
@@ -262,6 +289,9 @@ fn package_json(path: &Path) -> Option<String> {
         .read_to_end(&mut raw)
         .ok()?;
     let json: serde_json::Value = serde_json::from_slice(&raw).ok()?;
+    if json.get("private").and_then(serde_json::Value::as_bool) == Some(true) {
+        return None;
+    }
     Some(json.get("version")?.as_str()?.to_owned())
 }
 
@@ -322,7 +352,7 @@ fn node(cwd: &Path) -> Option<String> {
 }
 
 fn java(cwd: &Path) -> Option<String> {
-    version_in_project(
+    if project_file(
         cwd,
         &[
             "pom.xml",
@@ -330,10 +360,41 @@ fn java(cwd: &Path) -> Option<String> {
             "build.gradle.kts",
             ".java-version",
         ],
-        "java",
-        "java",
-        &["--version"],
     )
+    .is_none()
+    {
+        return Some(String::new());
+    }
+    let binary = env::var_os("JAVA_HOME")
+        .map(|home| Path::new(&home).join("bin/java"))
+        .unwrap_or_else(|| "java".into());
+    if let Some((status, output)) =
+        capture_output(Command::new(&binary).arg("-Xinternalversion"), true)
+        && status.success()
+    {
+        let mut text = String::new();
+        output.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
+        if let Some(details) = text.split_once(", built on").map(|(details, _)| details) {
+            let raw = details
+                .rsplit_once("JRE")
+                .and_then(|(_, jre)| jre.rsplit_once('('))
+                .or_else(|| details.split_once("OpenJ9 "));
+            if let Some((_, raw)) = raw {
+                let version = raw
+                    .split(|character: char| !character.is_ascii_digit() && character != '.')
+                    .next()
+                    .unwrap_or_default()
+                    .split('.')
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(".");
+                if !version.is_empty() {
+                    return Some(format!("java:{version}"));
+                }
+            }
+        }
+    }
+    version("java", binary.to_str()?, &["--version"])
 }
 
 fn ruby(cwd: &Path) -> Option<String> {
@@ -347,17 +408,22 @@ fn ruby(cwd: &Path) -> Option<String> {
 }
 
 fn environment(_: &Path) -> Option<String> {
-    let name = env::var_os("VIRTUAL_ENV")
-        .and_then(|path| {
-            Path::new(&path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .or_else(|| env::var("CONDA_DEFAULT_ENV").ok());
+    let name = env::var_os("VIRTUAL_ENV").and_then(|path| {
+        Path::new(&path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
     Some(
         name.map(|name| format!("env:{}", clean(&name)))
             .unwrap_or_default(),
     )
+}
+
+fn conda(_: &Path) -> Option<String> {
+    let name = env::var("CONDA_DEFAULT_ENV")
+        .ok()
+        .filter(|name| !name.is_empty() && name != "base");
+    Some(name.map_or_else(String::new, |name| format!("conda:{}", clean(&name))))
 }
 
 fn python(cwd: &Path) -> Option<String> {
@@ -406,7 +472,9 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
     let Some(path) = env::var_os("PATH") else {
         return Some(String::new());
     };
-    if !env::split_paths(&path).any(|directory| directory.join(bin).is_file()) {
+    if !Path::new(bin).is_absolute()
+        && !env::split_paths(&path).any(|directory| directory.join(bin).is_file())
+    {
         return Some(String::new());
     }
     let (status, output) = capture(Command::new(bin).args(args))?;
@@ -429,5 +497,11 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
                 })
         })
         .flatten();
-    reported.map(|version| format!("{label}:{}", clean(version)))
+    let version = reported?;
+    let version = if label == "ruby" {
+        version.split_once('p').map_or(version, |(base, _)| base)
+    } else {
+        version
+    };
+    Some(format!("{label}:{}", clean(version)))
 }

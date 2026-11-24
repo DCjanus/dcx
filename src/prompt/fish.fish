@@ -29,11 +29,11 @@ function fish_prompt --inherit-variable __dcx_prompt_executable
     if contains -- $fish_key_bindings fish_vi_key_bindings fish_hybrid_key_bindings
         set -a args --mode=$fish_bind_mode
     end
-    if set -q SSH_CONNECTION
-        set -a args --identity="$USER@$hostname"
+    if set -q SSH_CONNECTION; or set -q SSH_CLIENT; or set -q SSH_TTY
+        set -a args --identity="$USER"
     else if test "$EUID" = 0
         set -a args --identity="$USER"
     end
-    command "$__dcx_prompt_executable" prompt render --shell-pid=$fish_pid --width=$COLUMNS $args
+    command "$__dcx_prompt_executable" prompt render --shell-pid=$fish_pid --width=$COLUMNS --hostname="$hostname" $args
     or printf '%s > ' (prompt_pwd)
 end

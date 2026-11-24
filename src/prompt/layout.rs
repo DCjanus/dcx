@@ -25,8 +25,48 @@ impl Layout {
         }
     }
 
+    pub(super) fn nerd(&self) -> bool {
+        self.nerd
+    }
+
+    pub(super) fn python(&mut self, sample: &str, environment: &str) {
+        let version = sample.strip_prefix("py:").unwrap_or_default();
+        let environment = environment.strip_prefix("env:").unwrap_or_default();
+        if version.is_empty() && environment.is_empty() {
+            return;
+        }
+        let mut label = String::from("🐍");
+        if !version.is_empty() {
+            label.push_str(&format!(" v{version}"));
+        }
+        if !environment.is_empty() {
+            label.push_str(&format!(" ({environment})"));
+        }
+        self.item_with_prefix("via ", &label, "1;33", false);
+    }
+
     pub(super) fn identity(&mut self, identity: &str) {
-        self.item(identity, "1;33", false);
+        let style = if identity == "root" { "1;31" } else { "1;33" };
+        self.item(identity, style, false);
+        self.remote_connector();
+    }
+
+    pub(super) fn hostname(&mut self, hostname: &str) {
+        if !hostname.is_empty() {
+            let label = if self.nerd {
+                format!("🌐 {hostname}")
+            } else {
+                hostname.to_owned()
+            };
+            self.item(&label, "1;2;32", false);
+            self.remote_connector();
+        }
+    }
+
+    fn remote_connector(&mut self) {
+        if self.nerd {
+            self.item("in", "", false);
+        }
     }
 
     pub(super) fn directory(&mut self, cwd: &Path, git_depth: Option<usize>) {
@@ -53,74 +93,175 @@ impl Layout {
             let value = value.split_once('\n').map_or(value, |(_, summary)| summary);
             let git = value.strip_prefix("git:").unwrap_or(value);
             let (branch, flags) = git.split_once(' ').unwrap_or((git, ""));
-            let prefix = if self.nerd { "" } else { "on" };
-            self.item(&format!("{prefix} {branch}"), "1;35", false);
+            let flags = flags.split_whitespace().collect::<Vec<_>>();
+            let branch = if self.nerd {
+                match flags.iter().find_map(|flag| flag.strip_prefix("upstream:")) {
+                    Some(upstream) => format!(" {branch}:{upstream}"),
+                    None => format!(" {branch}"),
+                }
+            } else {
+                branch.to_owned()
+            };
+            self.item_with_prefix("on ", &branch, "1;35", false);
             let mut markers = String::new();
-            for flag in flags.split_whitespace() {
-                let marker = match flag {
-                    "staged" => "+",
-                    "modified" => "!",
-                    "untracked" => "?",
-                    "conflict" => "=",
-                    _ => "",
+            if self.nerd {
+                for (status, marker) in [
+                    ("conflict", '='),
+                    ("stash", '$'),
+                    ("deleted", '✘'),
+                    ("renamed", '»'),
+                    ("modified", '!'),
+                    ("staged", '+'),
+                    ("untracked", '?'),
+                ] {
+                    if flags.iter().any(|flag| git_status_name(flag) == status) {
+                        markers.push(marker);
+                    }
+                }
+                let ahead = flags.iter().any(|flag| {
+                    flag.strip_prefix('+')
+                        .and_then(|count| count.parse::<u32>().ok())
+                        .is_some_and(|count| count > 0)
+                });
+                let behind = flags.iter().any(|flag| {
+                    flag.strip_prefix('-')
+                        .and_then(|count| count.parse::<u32>().ok())
+                        .is_some_and(|count| count > 0)
+                });
+                match (ahead, behind) {
+                    (true, true) => markers.push('⇕'),
+                    (true, false) => markers.push('⇡'),
+                    (false, true) => markers.push('⇣'),
+                    _ => {}
+                }
+            }
+            for flag in flags {
+                if flag.starts_with("upstream:") {
+                    continue;
+                }
+                if let Some(hash) = flag.strip_prefix("commit:") {
+                    self.item(&format!("({hash})"), "1;32", false);
+                    continue;
+                }
+                if self.nerd
+                    && (flag.starts_with(['+', '-'])
+                        || matches!(
+                            git_status_name(flag),
+                            "conflict"
+                                | "stash"
+                                | "deleted"
+                                | "renamed"
+                                | "modified"
+                                | "staged"
+                                | "untracked"
+                        ))
+                {
+                    continue;
+                }
+                let operation = match flag {
+                    "rebase" => Some("REBASING"),
+                    "merge" => Some("MERGING"),
+                    "cherry-pick" => Some("CHERRY-PICKING"),
+                    "revert" => Some("REVERTING"),
+                    "bisect" => Some("BISECTING"),
+                    "am" => Some("AM"),
+                    _ => None,
                 };
-                if self.nerd && !marker.is_empty() {
-                    markers.push_str(marker);
+                if self.nerd
+                    && let Some(operation) = operation
+                {
+                    self.item_with_affixes("(", operation, ")", "1;33", false);
                 } else {
-                    self.item(flag, "33", false);
+                    self.item(
+                        flag,
+                        if operation.is_some() { "1;33" } else { "1;31" },
+                        false,
+                    );
                 }
             }
             if !markers.is_empty() {
-                self.item(&format!("[{markers}]"), "1;33", false);
+                self.item(&format!("[{markers}]"), "1;31", false);
             }
         } else {
             let (label, value) = value.split_once(':').unwrap_or(("", value));
             let (plain, icon, color) = match label {
-                "pkg" => ("pkg", "📦", "33"),
-                "go" => ("go", "🐹", "36"),
-                "rust" => ("rust", "🦀", "31"),
-                "node" => ("node", "", "32"),
-                "py" => ("py", "🐍", "33"),
-                "env" => ("env", "󰈙", "33"),
-                "java" => ("java", "☕", "31"),
-                "ruby" => ("ruby", "💎", "31"),
+                "pkg" => ("pkg", "📦", "1;38;5;208"),
+                "go" => ("go", "🐹", "1;36"),
+                "rust" => ("rust", "🦀", "1;31"),
+                "node" => ("node", "", "1;32"),
+                "py" => ("py", "🐍", "1;33"),
+                "env" => ("env", "󰈙", "1;33"),
+                "conda" => ("conda", "🅒", "1;32"),
+                "java" => ("java", "☕", "2;31"),
+                "ruby" => ("ruby", "💎", "1;31"),
                 _ => return,
             };
             let item = if self.nerd {
-                let version_prefix = if label == "env" { "" } else { "v" };
-                format!("{icon} {version_prefix}{value}")
+                let version_prefix = if matches!(label, "env" | "conda") {
+                    ""
+                } else {
+                    "v"
+                };
+                format!(
+                    "{icon} {version_prefix}{}",
+                    value
+                        .strip_prefix('v')
+                        .filter(|_| label == "pkg")
+                        .unwrap_or(value)
+                )
             } else {
                 format!("{plain}:{value}")
             };
-            let color = if self.nerd && label == "pkg" {
-                "1;38;5;208"
+            let prefix = if self.nerd {
+                match label {
+                    "pkg" => "is ",
+                    "env" => "",
+                    _ => "via ",
+                }
             } else {
-                color
+                ""
             };
-            self.item(&item, color, false);
+            self.item_with_prefix(prefix, &item, color, false);
         }
     }
 
     pub(super) fn jobs(&mut self, jobs: usize) {
         match jobs {
             0 => {}
-            1 => self.item("1 job", "34", false),
-            _ => self.item(&format!("{jobs} jobs"), "34", false),
+            1 => self.item("1 job", "1;34", false),
+            _ => self.item(&format!("{jobs} jobs"), "1;34", false),
         }
     }
 
     pub(super) fn duration(&mut self, duration: u64) {
         if duration >= 2000 {
-            self.item(
-                &format!("took {:.1}s", duration as f64 / 1000.0),
-                "33",
+            self.item_with_prefix(
+                "took ",
+                &if self.nerd {
+                    duration_text(duration)
+                } else {
+                    format!("{:.1}s", duration as f64 / 1000.0)
+                },
+                "1;33",
                 false,
             );
         }
     }
 
-    pub(super) fn finish(mut self, status: u32, mode: Option<&str>) -> String {
+    pub(super) fn finish(mut self, status: u32, mode: Option<&str>, jobs: usize) -> String {
+        if self.nerd {
+            self.output.insert(0, '\n');
+        }
         self.output.push('\n');
+        if self.nerd && jobs > 0 {
+            let label = if jobs == 1 {
+                "✦".into()
+            } else {
+                format!("✦{jobs}")
+            };
+            self.styled(&label, "1;34");
+            self.output.push(' ');
+        }
         let (character, color) = match mode {
             Some("visual") if self.nerd => ("❮", "1;33"),
             Some("replace" | "replace_one") if self.nerd => ("❮", "1;35"),
@@ -141,7 +282,16 @@ impl Layout {
                 }
             }
         };
-        let (text, style) = if status == 0 {
+        let (text, style) = if self.nerd {
+            let style = if status != 0
+                && !matches!(mode, Some("default" | "visual" | "replace" | "replace_one"))
+            {
+                "1;31"
+            } else {
+                color
+            };
+            (character.to_owned(), style)
+        } else if status == 0 {
             (character.to_owned(), color)
         } else {
             (format!("[{status}] {character}"), "1;31")
@@ -152,7 +302,22 @@ impl Layout {
     }
 
     fn item(&mut self, text: &str, style: &str, keep_end: bool) {
-        let text = clean(text);
+        self.item_with_prefix("", text, style, keep_end);
+    }
+
+    fn item_with_prefix(&mut self, prefix: &str, text: &str, style: &str, keep_end: bool) {
+        self.item_with_affixes(prefix, text, "", style, keep_end);
+    }
+
+    fn item_with_affixes(
+        &mut self,
+        prefix: &str,
+        text: &str,
+        suffix: &str,
+        style: &str,
+        keep_end: bool,
+    ) {
+        let text = format!("{prefix}{}{suffix}", clean(text));
         let text = fit(&text, self.width, keep_end);
         let width = display_width(&text);
         if width == 0 {
@@ -167,21 +332,47 @@ impl Layout {
                 self.line_width += 1;
             }
         }
-        self.styled(&text, style);
+        if let Some(text) = text
+            .strip_prefix(prefix)
+            .and_then(|text| text.strip_suffix(suffix))
+        {
+            self.output.push_str(prefix);
+            self.styled(text, style);
+            self.output.push_str(suffix);
+        } else {
+            self.styled(&text, style);
+        }
         self.line_width += width;
     }
 
     fn styled(&mut self, text: &str, style: &str) {
-        if self.color {
+        if self.color && !style.is_empty() {
             self.output.push_str("\x1b[");
             self.output.push_str(style);
             self.output.push('m');
         }
         self.output.push_str(text);
-        if self.color {
+        if self.color && !style.is_empty() {
             self.output.push_str("\x1b[0m");
         }
     }
+}
+
+fn duration_text(duration: u64) -> String {
+    let mut remaining = duration / 1000;
+    let mut text = String::new();
+    for (unit, divisor) in [('d', 86_400), ('h', 3_600), ('m', 60), ('s', 1)] {
+        let count = remaining / divisor;
+        if count > 0 || !text.is_empty() || divisor == 1 {
+            text.push_str(&format!("{count}{unit}"));
+        }
+        remaining %= divisor;
+    }
+    text
+}
+
+fn git_status_name(flag: &str) -> &str {
+    flag.split_once(':').map_or(flag, |(name, _)| name)
 }
 
 fn display_directory(cwd: &Path, git_depth: Option<usize>) -> String {
@@ -261,6 +452,24 @@ fn fit(text: &str, width: usize, keep_end: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn renders_nerd_git_markers_in_bold_red() {
+        let mut layout = Layout::new(80);
+        layout.nerd = true;
+        layout.color = true;
+        layout.module("git", "git:main modified untracked");
+        assert!(layout.finish(0, None, 0).contains("\x1b[1;31m[!?]\x1b[0m"));
+    }
+
+    #[test]
+    fn groups_stash_with_other_nerd_git_markers() {
+        let mut layout = Layout::new(80);
+        layout.nerd = true;
+        layout.color = false;
+        layout.module("git", "git:main staged modified untracked conflict stash:2");
+        assert_eq!(layout.finish(0, None, 0), "\non  main [=$!+?]\n❯ ");
+    }
 
     #[test]
     fn truncates_wide_text_at_character_boundaries() {

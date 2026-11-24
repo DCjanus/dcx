@@ -14,6 +14,7 @@ use crate::AnyResult;
 
 mod layout;
 mod probes;
+mod rex;
 
 const GIT_INTERVAL: Duration = Duration::from_secs(2);
 const TOOL_INTERVAL: Duration = Duration::from_secs(30);
@@ -40,6 +41,13 @@ pub enum Command {
         #[arg(long)]
         after_command: Option<u64>,
     },
+    #[command(hide = true)]
+    RefreshRex {
+        #[arg(long)]
+        shell_pid: u32,
+        #[arg(long)]
+        shown_remote: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -56,6 +64,8 @@ pub struct RenderArguments {
     mode: Option<String>,
     #[arg(long)]
     identity: Option<String>,
+    #[arg(long)]
+    hostname: Option<String>,
     #[arg(long, default_value_t = 80)]
     width: usize,
     #[arg(long)]
@@ -71,6 +81,10 @@ pub fn run(command: Command) -> AnyResult {
             shown,
             after_command,
         } => refresh(shell_pid, shown, after_command)?,
+        Command::RefreshRex {
+            shell_pid,
+            shown_remote,
+        } => rex::refresh(shell_pid, shown_remote)?,
     }
     Ok(())
 }
@@ -95,6 +109,7 @@ fn render(arguments: RenderArguments) -> AnyResult {
         jobs,
         mode,
         identity,
+        hostname,
         width,
         after_command,
     } = arguments;
@@ -103,9 +118,22 @@ fn render(arguments: RenderArguments) -> AnyResult {
     let now = timestamp();
     let after_command = after_command.then_some(now);
     let samples = cache.as_deref().map(Samples::read).unwrap_or_default();
+    let ssh = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+        .iter()
+        .any(|key| env::var_os(key).is_some());
+    let rex = hostname
+        .as_ref()
+        .filter(|_| !ssh)
+        .and_then(|_| rex::State::read());
     let mut layout = layout::Layout::new(width);
     if let Some(identity) = identity {
         layout.identity(&identity);
+    }
+    if let Some(hostname) = hostname
+        .as_deref()
+        .filter(|_| ssh || rex.as_ref().is_some_and(|state| state.remote))
+    {
+        layout.hostname(hostname.split('.').next().unwrap_or_default());
     }
     let git_depth = samples
         .0
@@ -115,33 +143,44 @@ fn render(arguments: RenderArguments) -> AnyResult {
         .and_then(|(sample, _)| sample.text.split_once('\n'))
         .and_then(|(depth, _)| depth.parse::<usize>().ok());
     layout.directory(&cwd, git_depth);
+    let environment = samples
+        .0
+        .iter()
+        .zip(probes::ALL)
+        .find(|(_, probe)| probe.name == "environment")
+        .map_or("", |(sample, _)| sample.text.as_str());
     for (sample, probe) in samples.0.iter().zip(probes::ALL) {
-        if !sample.text.is_empty() {
+        if layout.nerd() && probe.name == "python" {
+            layout.python(&sample.text, environment);
+        } else if !sample.text.is_empty() && !(layout.nerd() && probe.name == "environment") {
             layout.module(probe.name, &sample.text);
         }
     }
-    layout.jobs(jobs);
+    if !layout.nerd() {
+        layout.jobs(jobs);
+    }
     layout.duration(duration);
     let mut stdout = io::stdout().lock();
-    write!(stdout, "{}", layout.finish(status, mode.as_deref()))?;
+    write!(stdout, "{}", layout.finish(status, mode.as_deref(), jobs))?;
     stdout.flush()?;
 
     if cache.is_some() && samples.needs_refresh(now, after_command) {
-        let mut worker = process::Command::new(env::current_exe()?);
-        worker.args([
-            "prompt",
-            "refresh",
-            &format!("--shell-pid={shell_pid}"),
-            &format!("--shown={}", samples.fingerprint()),
-        ]);
+        let mut args = vec![
+            "refresh".to_owned(),
+            format!("--shell-pid={shell_pid}"),
+            format!("--shown={}", samples.fingerprint()),
+        ];
         if let Some(after_command) = after_command {
-            worker.arg(format!("--after-command={after_command}"));
+            args.push(format!("--after-command={after_command}"));
         }
-        let _ = worker
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
+        spawn_worker(&args);
+    }
+    if let Some(state) = rex.filter(|state| state.stale()) {
+        let mut args = vec!["refresh-rex".to_owned(), format!("--shell-pid={shell_pid}")];
+        if state.remote {
+            args.push("--shown-remote".into());
+        }
+        spawn_worker(&args);
     }
     Ok(())
 }
@@ -188,12 +227,30 @@ fn refresh(shell_pid: u32, shown: u64, after_command: Option<u64>) -> AnyResult 
     }
     let changed = Samples::read(&cache).fingerprint() != shown;
     drop(lock);
-    if changed && shell_pid > 1 && cfg!(unix) {
+    if changed {
+        repaint(shell_pid);
+    }
+    Ok(())
+}
+
+fn spawn_worker(args: &[String]) {
+    if let Ok(executable) = env::current_exe() {
+        let _ = process::Command::new(executable)
+            .arg("prompt")
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
+fn repaint(shell_pid: u32) {
+    if shell_pid > 1 && cfg!(unix) {
         let _ = process::Command::new("/bin/kill")
             .args(["-s", "USR1", &shell_pid.to_string()])
             .status();
     }
-    Ok(())
 }
 
 fn fingerprint(value: &impl Hash) -> u64 {
@@ -202,11 +259,15 @@ fn fingerprint(value: &impl Hash) -> u64 {
     hasher.finish()
 }
 
-fn cache_dir(cwd: &Path) -> Option<PathBuf> {
-    let root = env::var_os("XDG_CACHE_HOME")
+fn cache_root() -> Option<PathBuf> {
+    env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
+}
+
+fn cache_dir(cwd: &Path) -> Option<PathBuf> {
+    let root = cache_root()?;
     let mut selectors = env::vars_os()
         .filter(|(key, _)| {
             let key = key.to_string_lossy();
@@ -323,6 +384,13 @@ fn clean(text: &str) -> String {
 }
 
 fn capture(command: &mut process::Command) -> Option<(process::ExitStatus, File)> {
+    capture_output(command, false)
+}
+
+fn capture_output(
+    command: &mut process::Command,
+    include_stderr: bool,
+) -> Option<(process::ExitStatus, File)> {
     // 临时文件避免管道写满阻塞，也避免超时后等待后代进程关闭管道。
     let mut output = tempfile::tempfile().ok()?;
     #[cfg(unix)]
@@ -330,9 +398,14 @@ fn capture(command: &mut process::Command) -> Option<(process::ExitStatus, File)
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
+    let stderr = if include_stderr {
+        Stdio::from(output.try_clone().ok()?)
+    } else {
+        Stdio::null()
+    };
     let mut child = command
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .stdout(output.try_clone().ok()?)
         .spawn()
         .ok()?;

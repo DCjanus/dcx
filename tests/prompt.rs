@@ -220,3 +220,46 @@ fn refreshes_tools_when_a_project_manifest_is_added() {
     fixture.render(project, &["--after-command"]);
     wait_until(|| fixture.render(project, &[]).contains("java:26.0.1"));
 }
+
+#[test]
+fn refreshes_hostname_when_the_same_rex_pane_changes_owner() {
+    let fixture = Fixture::new();
+    let project = &fixture.project;
+    fixture.tool(
+        "rex",
+        r#"printf '{"windows":[{"layers":[{"blocks":[{"block_id":"block:test","owner":"%s"}]}]}],"clients":[{"client_id":"local","connection_state":"connected","principal":{"transport":"unix"}},{"client_id":"remote","connection_state":"connected","principal":{"transport":"tailscale"}}]}' "$(cat owner)"
+touch queried
+"#,
+    );
+    fs::write(project.join("owner"), "local").unwrap();
+    let render = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_dcx"))
+            .current_dir(project)
+            .env_clear()
+            .env("HOME", fixture.root.path())
+            .env("PATH", format!("{}:/usr/bin:/bin", fixture.bin.display()))
+            .env("NO_COLOR", "1")
+            .env("REX_SERVER", "unix:///test.sock")
+            .env("REX_BLOCK", "block:test")
+            .args([
+                "prompt",
+                "render",
+                "--shell-pid=0",
+                "--status=0",
+                "--duration=0",
+                "--jobs=0",
+                "--hostname=devbox.example",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    assert!(!render().contains("devbox"));
+    wait_until(|| project.join("queried").exists());
+    fs::write(project.join("owner"), "remote").unwrap();
+    wait_until(|| render().contains("devbox "));
+    fs::write(project.join("owner"), "local").unwrap();
+    wait_until(|| !render().contains("devbox"));
+}
