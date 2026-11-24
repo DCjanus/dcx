@@ -10,6 +10,22 @@
 
 ## 子命令
 
+### `dcx prompt init fish`
+
+在 `~/.config/fish/config.fish` 中移除 Starship 的初始化，并在配置好 `PATH` 后加载：
+
+```fish
+dcx prompt init fish | source
+```
+
+如果设备还在 `conf.d` 中托管 Starship 初始化，也需要停用对应的启动片段。重新打开 fish 即可试用。
+
+提示符显示当前目录、上条命令的失败状态和耗时、后台作业、Git 分支与工作区状态、项目和工具版本以及 Python 虚拟环境。工具版本覆盖 Go、Rust、Node.js、Python、Java 与 Ruby。远程登录时显示用户和主机名。
+
+默认使用便于在各类终端显示的 ASCII 标签。终端已配置 Nerd Font 时，可以设置 `set -gx DCX_PROMPT_STYLE nerd` 启用图标。窄窗口会在模块之间换行，长路径优先保留末尾目录。
+
+首屏会复用同一目录和工具环境的磁盘缓存，Git 与工具版本在后台刷新。缓存默认位于 `~/.cache/dcx/prompt-v1`，设置 `XDG_CACHE_HOME` 时使用该目录。日常执行命令后检查 Git 和项目的工具配置，缓存中的工具版本也会在下次显示提示符时按 30 秒间隔重新探测。
+
 ### `dcx qr`
 
 从文本生成二维码，默认在终端显示，也可按输出文件扩展名保存为 PNG 或 SVG：
