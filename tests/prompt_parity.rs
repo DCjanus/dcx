@@ -142,6 +142,7 @@ fn git_stash_counts_and_worktree_states_match_starship() {
     fs::remove_file(fixture.cwd.join("tracked")).unwrap();
     status(&fixture, "[$✘+?]");
     fixture.git(&["restore", "--staged", "--worktree", "tracked"]);
+    fixture.git(&["config", "status.renames", "false"]);
     fixture.git(&["mv", "tracked", "renamed"]);
     status(&fixture, "[$»?]");
     fixture.write("renamed", "renamed and modified\n");
@@ -525,7 +526,7 @@ fn cargo_workspace_and_members_show_inherited_package_version() {
         (&workspace, ""),
         (
             &member,
-            "[package]\nname = \"member\"\nversion.workspace = true\n",
+            "[package]\nname = \"member\"\nversion.workspace = true # inherit\n",
         ),
         (
             &member,
@@ -543,5 +544,55 @@ fn cargo_workspace_and_members_show_inherited_package_version() {
         if let Some(oracle) = fixture.oracle(&["module", "package"], &[]) {
             assert!(oracle.contains(expected), "{oracle:?}");
         }
+    }
+}
+
+#[test]
+fn parses_valid_toml_and_poetry_package_versions() {
+    for (path, manifest, version) in [
+        (
+            "Cargo.toml",
+            "[package] # metadata\nversion = \"5.6.7\"\n",
+            "5.6.7",
+        ),
+        (
+            "Cargo.toml",
+            "package = { name = \"project\", version = \"5.6.7\" }\n",
+            "5.6.7",
+        ),
+        (
+            "pyproject.toml",
+            "[tool.poetry]\nversion = \"5.6.7\"\n",
+            "5.6.7",
+        ),
+        (
+            "pyproject.toml",
+            "[project]\nversion = \"1.2.3\"\n[tool.poetry]\nversion = \"5.6.7\"\n",
+            "1.2.3",
+        ),
+        ("package.json", "{\"version\":\" v5.6.7 \"}", "5.6.7"),
+    ] {
+        let fixture = Fixture::new();
+        fixture.write(path, manifest);
+        let expected = format!("is \x1b[1;38;5;208m📦 v{version}\x1b[0m");
+        let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
+        assert!(prompt.contains(&expected), "{prompt:?}");
+        if let Some(oracle) = fixture.oracle(&["module", "package"], &[]) {
+            assert!(oracle.contains(&expected), "{oracle:?}");
+        }
+    }
+}
+
+#[test]
+fn python_version_accepts_stderr_from_the_selected_interpreter() {
+    let fixture = Fixture::new();
+    fixture.write("script.py", "");
+    fixture.tool("python", "printf 'Python 2.7.18\n' >&2");
+    fixture.tool("python3", "printf 'Python 3.15.2\n'");
+    let expected = "via \x1b[1;33m🐍 v2.7.18";
+    let prompt = fixture.render(&["--status=0", "--duration=0", "--jobs=0"], &[]);
+    assert!(prompt.contains(expected), "{prompt:?}");
+    if let Some(oracle) = fixture.oracle(&["module", "python"], &[]) {
+        assert!(oracle.contains(expected), "{oracle:?}");
     }
 }

@@ -210,10 +210,11 @@ impl Layout {
                 };
                 format!(
                     "{icon} {version_prefix}{}",
-                    value
-                        .strip_prefix('v')
-                        .filter(|_| label == "pkg")
-                        .unwrap_or(value)
+                    if label == "pkg" {
+                        value.trim().trim_start_matches('v')
+                    } else {
+                        value
+                    }
                 )
             } else {
                 format!("{plain}:{value}")

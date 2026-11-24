@@ -209,6 +209,8 @@ fn git(cwd: &Path) -> Option<String> {
         "--no-optional-locks",
         "-c",
         "core.quotePath=true",
+        "-c",
+        "status.renames=true",
         "status",
         "--porcelain=v2",
         "--branch",
@@ -383,7 +385,7 @@ fn package(cwd: &Path) -> Option<String> {
     };
     let version = cargo_package_version(directory)
         .or_else(|| package_json(&directory.join("package.json")))
-        .or_else(|| package_toml(&directory.join("pyproject.toml"), "[project]"));
+        .or_else(|| python_package_version(directory));
     Some(
         version
             .map(|version| format!("pkg:{version}"))
@@ -408,62 +410,65 @@ fn package_json(path: &Path) -> Option<String> {
     Some(json.get("version")?.as_str()?.to_owned())
 }
 
-fn package_toml(path: &Path, section: &str) -> Option<String> {
-    let value = toml_field(path, section, "version")?;
-    let quote = value
-        .chars()
-        .next()
-        .filter(|quote| matches!(quote, '"' | '\''))?;
-    Some(value[1..].split_once(quote)?.0.to_owned())
+fn python_package_version(directory: &Path) -> Option<String> {
+    let manifest = read_toml(&directory.join("pyproject.toml"))?;
+    manifest
+        .get("project")
+        .and_then(|project| project.get("version"))
+        .and_then(toml::Value::as_str)
+        .or_else(|| {
+            manifest
+                .get("tool")?
+                .get("poetry")?
+                .get("version")?
+                .as_str()
+        })
+        .map(str::to_owned)
 }
 
 fn cargo_package_version(directory: &Path) -> Option<String> {
-    let manifest = directory.join("Cargo.toml");
-    if let Some(version) = package_toml(&manifest, "[package]")
-        .or_else(|| package_toml(&manifest, "[workspace.package]"))
-    {
-        return Some(version);
+    let manifest = read_toml(&directory.join("Cargo.toml"))?;
+    let version = manifest
+        .get("package")
+        .and_then(|package| package.get("version"));
+    if let Some(version) = version.and_then(toml::Value::as_str) {
+        return Some(version.to_owned());
     }
-    let inherited = toml_field(&manifest, "[package]", "version.workspace").as_deref()
-        == Some("true")
-        || toml_field(&manifest, "[package.version]", "workspace").as_deref() == Some("true")
-        || toml_field(&manifest, "[package]", "version").is_some_and(|value| {
-            value
-                .chars()
-                .filter(|character| !character.is_whitespace())
-                .collect::<String>()
-                == "{workspace=true}"
-        });
-    if !inherited {
-        return None;
-    }
-    let workspace = directory
-        .ancestors()
-        .skip(1)
-        .map(|path| path.join("Cargo.toml"))
-        .find(|manifest| manifest.is_file())?;
-    package_toml(&workspace, "[workspace.package]")
+    let inherited = version
+        .and_then(|version| version.get("workspace"))
+        .and_then(toml::Value::as_bool)
+        == Some(true);
+    let workspace = if manifest.contains_key("workspace") || !inherited {
+        manifest
+    } else {
+        let path = directory
+            .ancestors()
+            .skip(1)
+            .map(|path| path.join("Cargo.toml"))
+            .find(|path| path.is_file())?;
+        read_toml(&path)?
+    };
+    Some(
+        workspace
+            .get("workspace")?
+            .get("package")?
+            .get("version")?
+            .as_str()?
+            .to_owned(),
+    )
 }
 
-fn toml_field(path: &Path, section: &str, field: &str) -> Option<String> {
+fn read_toml(path: &Path) -> Option<toml::Table> {
     if !path.is_file() {
         return None;
     }
-    // 仅读取常见的单行版本声明，动态版本由各项目的工具处理。
-    let mut in_section = false;
-    for line in BufReader::new(File::open(path).ok()?.take(64 * 1024)).lines() {
-        let line = line.ok()?;
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_section = line == section;
-        } else if in_section
-            && let Some((key, value)) = line.split_once('=')
-            && key.trim() == field
-        {
-            return Some(value.trim().to_owned());
-        }
-    }
-    None
+    let mut source = String::new();
+    File::open(path)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_string(&mut source)
+        .ok()?;
+    source.parse().ok()
 }
 
 fn go(cwd: &Path, kinds: SourceKinds) -> Option<String> {
@@ -607,14 +612,19 @@ fn version(label: &str, bin: &str, args: &[&str]) -> Option<String> {
     {
         return Some(String::new());
     }
-    let (status, output) = capture(Command::new(bin).args(args))?;
+    let (status, output) = capture_output(Command::new(bin).args(args), label == "py")?;
     let mut text = String::new();
     output.take(MAX_SAMPLE).read_to_string(&mut text).ok()?;
     let reported = status
         .success()
         .then(|| {
-            text.lines()
-                .next()
+            let mut lines = text.lines();
+            let first = if label == "py" {
+                lines.find(|line| line.starts_with("Python "))
+            } else {
+                lines.next()
+            };
+            first
                 .unwrap_or_default()
                 .split_whitespace()
                 .find_map(|word| {
