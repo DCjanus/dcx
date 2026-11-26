@@ -115,6 +115,7 @@ pub(super) fn refresh(shell_pid: u32, shown_remote: bool) -> AnyResult {
     Ok(())
 }
 
+/// 根据当前 pane 的 owner 判断是否通过远程连接访问。
 fn remote_owner(session: &Value, block: &str) -> bool {
     let Some(windows) = session["windows"].as_array() else {
         return false;
@@ -134,7 +135,60 @@ fn remote_owner(session: &Value, block: &str) -> bool {
         clients.iter().any(|client| {
             client["client_id"].as_str() == Some(owner)
                 && client["connection_state"].as_str() == Some("connected")
-                && client["principal"]["transport"].as_str() == Some("tailscale")
+                && remote_principal(&client["principal"])
         })
     })
+}
+
+/// 区分直接远程连接和经由 SSH 接入 Unix socket 的连接。
+fn remote_principal(principal: &Value) -> bool {
+    match principal["transport"].as_str() {
+        Some("tailscale") => true,
+        Some("unix") => principal["pid"]
+            .as_u64()
+            .and_then(|pid| u32::try_from(pid).ok())
+            .is_some_and(ssh_peer),
+        _ => false,
+    }
+}
+
+/// 在后台查询 Unix 对端的进程链，兼容 OpenSSH 新旧版本的进程名。
+fn ssh_peer(mut pid: u32) -> bool {
+    for _ in 0..8 {
+        if pid <= 1 {
+            break;
+        }
+        let Ok(output) = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "ppid=", "-o", "comm="])
+            .env("LC_ALL", "C")
+            .output()
+        else {
+            break;
+        };
+        if !output.status.success() {
+            break;
+        }
+        let line = String::from_utf8_lossy(&output.stdout);
+        let Some((parent, command)) = line.trim().split_once(char::is_whitespace) else {
+            break;
+        };
+        // macOS 可能在进程名后附加冒号和会话描述。
+        let executable = command
+            .trim()
+            .split_once(": ")
+            .map_or(command.trim(), |(name, _)| name);
+        if Path::new(executable).file_name().is_some_and(|name| {
+            matches!(name.to_str(), Some("sshd" | "sshd-session" | "sshd-auth"))
+        }) {
+            return true;
+        }
+        let Ok(parent) = parent.parse::<u32>() else {
+            break;
+        };
+        if parent == pid {
+            break;
+        }
+        pid = parent;
+    }
+    false
 }
