@@ -2,7 +2,9 @@ use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
-use dcx::{AnyResult, completion, feed, git, jwt, qr, skill, sort_file, ssh, uniq_any_order};
+use dcx::{
+    AnyResult, completion, feed, git, jwt, prompt, qr, skill, sort_file, ssh, uniq_any_order,
+};
 use size::Size;
 
 /// 文本处理、Git 仓库维护与 Coding Agent 辅助工具集。
@@ -26,6 +28,11 @@ struct Command {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    #[command(about = "Set up an asynchronous Fish prompt")]
+    Prompt {
+        #[command(subcommand)]
+        subcommand: prompt::Command,
+    },
     /// 从文本或 stdin 生成二维码。
     #[command(about = "Generate a QR code from text or standard input")]
     Qr {
@@ -232,13 +239,14 @@ fn main() -> AnyResult {
     let command = parsed
         .subcommand
         .expect("clap requires either a subcommand or --install-completion");
-    if !matches!(command, Commands::Skill { .. })
+    if !matches!(command, Commands::Skill { .. } | Commands::Prompt { .. })
         && let Err(error) = skill::auto_update()
     {
         eprintln!("warning: failed to update dcx-cli skill: {error:#}");
     }
 
     match command {
+        Commands::Prompt { subcommand } => prompt::run(subcommand),
         Commands::Qr {
             text,
             stdin: _,
