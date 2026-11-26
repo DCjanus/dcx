@@ -221,15 +221,25 @@ fn refreshes_tools_when_a_project_manifest_is_added() {
     wait_until(|| fixture.render(project, &[]).contains("java:26.0.1"));
 }
 
+/// 验证同一个 pane 切换本地、Tailscale 和 SSH owner 时更新缓存与主机名。
 #[test]
 fn refreshes_hostname_when_the_same_rex_pane_changes_owner() {
     let fixture = Fixture::new();
     let project = &fixture.project;
     fixture.tool(
         "rex",
-        r#"printf '{"windows":[{"layers":[{"blocks":[{"block_id":"block:test","owner":"%s"}]}]}],"clients":[{"client_id":"local","connection_state":"connected","principal":{"transport":"unix"}},{"client_id":"remote","connection_state":"connected","principal":{"transport":"tailscale"}}]}' "$(cat owner)"
+        r#"printf '{"windows":[{"layers":[{"blocks":[{"block_id":"block:test","owner":"%s"}]}]}],"clients":[{"client_id":"local","connection_state":"connected","principal":{"transport":"unix","pid":101}},{"client_id":"ssh","connection_state":"connected","principal":{"transport":"unix","pid":102}},{"client_id":"remote","connection_state":"connected","principal":{"transport":"tailscale"}}]}' "$(cat owner)"
 touch queried
 "#,
+    );
+    fixture.tool(
+        "ps",
+        r#"case "$2" in
+    101) printf '1 /Applications/Rex.app/Contents/MacOS/Rex\n' ;;
+    102) printf '103 rex\n' ;;
+    103) printf '1 sshd-session: user [postauth]\n' ;;
+    *) exit 1 ;;
+esac"#,
     );
     fs::write(project.join("owner"), "local").unwrap();
     let render = || {
@@ -259,6 +269,10 @@ touch queried
     assert!(!render().contains("devbox"));
     wait_until(|| project.join("queried").exists());
     fs::write(project.join("owner"), "remote").unwrap();
+    wait_until(|| render().contains("devbox "));
+    fs::write(project.join("owner"), "local").unwrap();
+    wait_until(|| !render().contains("devbox"));
+    fs::write(project.join("owner"), "ssh").unwrap();
     wait_until(|| render().contains("devbox "));
     fs::write(project.join("owner"), "local").unwrap();
     wait_until(|| !render().contains("devbox"));

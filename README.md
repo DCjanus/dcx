@@ -20,7 +20,7 @@ dcx prompt init fish | source
 
 如果设备还在 `conf.d` 中托管 Starship 初始化，也需要停用对应的启动片段。重新打开 fish 即可试用。
 
-提示符显示当前目录、上条命令的失败状态和耗时、后台作业、Git 分支与工作区状态、项目和工具版本以及 Python 虚拟环境。工具版本覆盖 Go、Rust、Node.js、Python、Java 与 Ruby。SSH 登录时显示用户和短主机名。Rex 终端的 pane 由 Tailscale 远端客户端接管时也会显示短主机名。Rex 检查在提示符渲染后后台运行，每个 pane 最多每秒一次。
+提示符显示当前目录、上条命令的失败状态和耗时、后台作业、Git 分支与工作区状态、项目和工具版本以及 Python 虚拟环境。工具版本覆盖 Go、Rust、Node.js、Python、Java 与 Ruby。SSH 登录时显示用户和短主机名。Rex 终端的 pane 由经 Tailscale 或 SSH 连接的远端客户端接管时也会显示短主机名。Rex 检查在提示符渲染后后台运行，每个 pane 最多每秒一次。刷新结果保存在本地磁盘，下次渲染直接读取。
 
 默认使用便于在各类终端显示的 ASCII 标签。终端已配置 Nerd Font 时，可以设置 `set -gx DCX_PROMPT_STYLE nerd` 启用图标。窄窗口会在模块之间换行，Git 目录优先显示从仓库根开始的相对路径，长路径保留末尾目录。
 
